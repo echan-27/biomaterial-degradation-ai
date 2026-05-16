@@ -1,0 +1,16 @@
+{
+  "best_model": "GradientBoostingRegressor",
+  "selection_rule": "Lowest RMSE on the held-out test set",
+  "rows_used": 155,
+  "target_column": "Mass_Remaining_Percentage",
+  "feature_columns": [
+    "Material_Type",
+    "Cellulose_Percentage",
+    "Temperature_C",
+    "pH_Level",
+    "Environment",
+    "Days_Elapsed",
+    "degree_substitution"
+  ],
+  "saved_model_path": "models/best_model.pkl"
+}
