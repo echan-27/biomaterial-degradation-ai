@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.clean_data import load_training_data
 from src.config import (
     CATEGORICAL_FEATURES,
+    DATA_PATH,
     FEATURE_COLUMNS,
     METRICS_PATH,
     MODEL_PATH,
@@ -141,6 +142,7 @@ def main() -> None:
         "best_model": best_model_name,
         "selection_rule": "Lowest RMSE on the held-out test set",
         "rows_used": int(len(data)),
+        "data_path": str(DATA_PATH.relative_to(PROJECT_ROOT)),
         "target_column": TARGET_COLUMN,
         "feature_columns": FEATURE_COLUMNS,
         "saved_model_path": str(MODEL_PATH.relative_to(PROJECT_ROOT)),

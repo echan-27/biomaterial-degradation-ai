@@ -45,6 +45,16 @@ def median_or_default(data: pd.DataFrame, column: str, default: float) -> float:
     return float(value)
 
 
+def max_or_default(data: pd.DataFrame, column: str, default: float) -> float:
+    """Use a dataset maximum when available; otherwise use a safe default."""
+    if data.empty or column not in data:
+        return default
+    value = data[column].max()
+    if pd.isna(value):
+        return default
+    return float(value)
+
+
 def read_model_summary() -> str:
     """Return the saved model name if the training script wrote a summary file."""
     if not Path(SUMMARY_PATH).exists():
@@ -115,6 +125,8 @@ with st.sidebar:
         median_or_default(training_data, "pH_Level", 7.0),
     )
     day_default = int(round(median_or_default(training_data, "Days_Elapsed", 14.0)))
+    max_training_day = int(round(max_or_default(training_data, "Days_Elapsed", 365.0)))
+    max_app_day = max(30, max_training_day)
     ds_default = median_or_default(
         matching_material,
         "degree_substitution",
@@ -145,8 +157,8 @@ with st.sidebar:
     days_elapsed = st.number_input(
         "Days elapsed",
         min_value=0,
-        max_value=365,
-        value=max(0, min(365, day_default)),
+        max_value=max_app_day,
+        value=max(0, min(max_app_day, day_default)),
         step=1,
     )
     degree_substitution = st.number_input(
@@ -160,7 +172,7 @@ with st.sidebar:
     curve_end_day = st.slider(
         "Curve end day",
         min_value=1,
-        max_value=365,
+        max_value=max_app_day,
         value=max(30, int(days_elapsed)),
         step=1,
     )

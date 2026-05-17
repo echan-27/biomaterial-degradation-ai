@@ -1,7 +1,8 @@
 {
   "best_model": "GradientBoostingRegressor",
   "selection_rule": "Lowest RMSE on the held-out test set",
-  "rows_used": 155,
+  "rows_used": 311,
+  "data_path": "data/degradationdata.xlsx",
   "target_column": "Mass_Remaining_Percentage",
   "feature_columns": [
     "Material_Type",

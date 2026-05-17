@@ -48,6 +48,15 @@ pip install -r requirements.txt
 
 ## Train the Model
 
+The project expects the spreadsheet at:
+
+```text
+data/degradationdata.xlsx
+```
+
+If you replace the spreadsheet with a new version, keep the same column names and
+run the training command again.
+
 Run:
 
 ```bash
