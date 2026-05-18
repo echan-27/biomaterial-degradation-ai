@@ -2,6 +2,9 @@
   "best_model": "GradientBoostingRegressor",
   "selection_rule": "Lowest RMSE on the held-out test set",
   "rows_used": 311,
+  "train_rows": 248,
+  "test_rows": 63,
+  "test_size": 0.2,
   "data_path": "data/degradationdata.xlsx",
   "target_column": "Mass_Remaining_Percentage",
   "feature_columns": [
@@ -13,5 +16,11 @@
     "Days_Elapsed",
     "degree_substitution"
   ],
-  "saved_model_path": "models/best_model.pkl"
+  "best_model_test_metrics": {
+    "MAE": 9.44300811934466,
+    "RMSE": 15.603180463347016,
+    "R2": 0.695646301964576
+  },
+  "saved_model_path": "models/best_model.pkl",
+  "test_predictions_path": "models/test_predictions.csv"
 }

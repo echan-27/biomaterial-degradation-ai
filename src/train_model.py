@@ -32,10 +32,12 @@ from src.config import (
     PROJECT_ROOT,
     SUMMARY_PATH,
     TARGET_COLUMN,
+    TEST_PREDICTIONS_PATH,
 )
 
 
 RANDOM_STATE = 42
+TEST_SIZE = 0.2
 
 
 def build_preprocessor() -> ColumnTransformer:
@@ -85,19 +87,22 @@ def evaluate_model(model: Pipeline, X_test: pd.DataFrame, y_test: pd.Series) -> 
     }
 
 
-def train_and_compare_models(data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    """Train each model once and return a metrics table plus the best model name."""
+def train_and_compare_models(
+    data: pd.DataFrame,
+) -> tuple[pd.DataFrame, str, Pipeline, pd.DataFrame, pd.Series, int, int]:
+    """Train models on 80% of the data and evaluate on the held-out 20%."""
     X = data[FEATURE_COLUMNS]
     y = data[TARGET_COLUMN]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
-        test_size=0.2,
+        test_size=TEST_SIZE,
         random_state=RANDOM_STATE,
     )
 
     results = []
+    trained_models = {}
     model_names = [
         "DummyRegressor",
         "Ridge Regression",
@@ -110,42 +115,81 @@ def train_and_compare_models(data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
         model.fit(X_train, y_train)
         metrics = evaluate_model(model, X_test, y_test)
         results.append({"Model": model_name, **metrics})
+        trained_models[model_name] = model
 
     metrics_table = pd.DataFrame(results).sort_values("RMSE").reset_index(drop=True)
     best_model_name = str(metrics_table.loc[0, "Model"])
-    return metrics_table, best_model_name
+    best_model = trained_models[best_model_name]
+    return (
+        metrics_table,
+        best_model_name,
+        best_model,
+        X_test,
+        y_test,
+        len(X_train),
+        len(X_test),
+    )
 
 
-def save_best_model(data: pd.DataFrame, best_model_name: str) -> Pipeline:
-    """Retrain the best model on all available data and save it to disk."""
-    X = data[FEATURE_COLUMNS]
-    y = data[TARGET_COLUMN]
-
-    best_model = build_model(best_model_name)
-    best_model.fit(X, y)
-
+def save_best_model(best_model: Pipeline) -> None:
+    """Save the best model that was trained only on the training set."""
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(best_model, MODEL_PATH)
-    return best_model
+
+
+def save_test_predictions(
+    best_model: Pipeline,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+) -> None:
+    """Save actual vs predicted mass remaining percentage for the test set."""
+    predictions = best_model.predict(X_test)
+    prediction_table = X_test.copy()
+    prediction_table["Actual_Mass_Remaining_Percentage"] = y_test.to_numpy()
+    prediction_table["Predicted_Mass_Remaining_Percentage"] = predictions
+    prediction_table["Prediction_Error"] = (
+        prediction_table["Predicted_Mass_Remaining_Percentage"]
+        - prediction_table["Actual_Mass_Remaining_Percentage"]
+    )
+    prediction_table.to_csv(TEST_PREDICTIONS_PATH, index=False)
 
 
 def main() -> None:
     """Run the complete training workflow."""
     data = load_training_data()
-    metrics_table, best_model_name = train_and_compare_models(data)
-    save_best_model(data, best_model_name)
+    (
+        metrics_table,
+        best_model_name,
+        best_model,
+        X_test,
+        y_test,
+        train_rows,
+        test_rows,
+    ) = train_and_compare_models(data)
+    save_best_model(best_model)
+    save_test_predictions(best_model, X_test, y_test)
 
     METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     metrics_table.to_csv(METRICS_PATH, index=False)
+    best_metrics = metrics_table.iloc[0]
 
     summary = {
         "best_model": best_model_name,
         "selection_rule": "Lowest RMSE on the held-out test set",
         "rows_used": int(len(data)),
+        "train_rows": int(train_rows),
+        "test_rows": int(test_rows),
+        "test_size": TEST_SIZE,
         "data_path": str(DATA_PATH.relative_to(PROJECT_ROOT)),
         "target_column": TARGET_COLUMN,
         "feature_columns": FEATURE_COLUMNS,
+        "best_model_test_metrics": {
+            "MAE": float(best_metrics["MAE"]),
+            "RMSE": float(best_metrics["RMSE"]),
+            "R2": float(best_metrics["R2"]),
+        },
         "saved_model_path": str(MODEL_PATH.relative_to(PROJECT_ROOT)),
+        "test_predictions_path": str(TEST_PREDICTIONS_PATH.relative_to(PROJECT_ROOT)),
     }
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 

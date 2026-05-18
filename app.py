@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src.clean_data import get_category_options, load_training_data
-from src.config import DATA_PATH, MODEL_PATH, SUMMARY_PATH
+from src.config import DATA_PATH, METRICS_PATH, MODEL_PATH, SUMMARY_PATH
 from src.predict import (
     load_model,
     predict_degradation_curve,
@@ -64,6 +64,28 @@ def read_model_summary() -> str:
         return str(summary.get("best_model", "Saved model"))
     except ValueError:
         return "Saved model"
+
+
+def read_best_test_metrics() -> dict[str, float] | None:
+    """Read the best model's held-out test metrics from model_metrics.csv."""
+    if not Path(METRICS_PATH).exists():
+        return None
+
+    try:
+        metrics_table = pd.read_csv(METRICS_PATH)
+    except Exception:
+        return None
+
+    required_columns = ["MAE", "RMSE", "R2"]
+    if metrics_table.empty or any(column not in metrics_table for column in required_columns):
+        return None
+
+    best_row = metrics_table.sort_values("RMSE").iloc[0]
+    return {
+        "MAE": float(best_row["MAE"]),
+        "RMSE": float(best_row["RMSE"]),
+        "R2": float(best_row["R2"]),
+    }
 
 
 st.set_page_config(
@@ -193,6 +215,14 @@ metric_columns = st.columns(3)
 metric_columns[0].metric("Mass remaining", f"{mass_remaining:.1f}%")
 metric_columns[1].metric("Degradation", f"{degradation_percentage:.1f}%")
 metric_columns[2].metric("Model", read_model_summary())
+
+test_metrics = read_best_test_metrics()
+if test_metrics:
+    st.subheader("Held-out test performance")
+    performance_columns = st.columns(3)
+    performance_columns[0].metric("MAE", f"{test_metrics['MAE']:.2f}")
+    performance_columns[1].metric("RMSE", f"{test_metrics['RMSE']:.2f}")
+    performance_columns[2].metric("R²", f"{test_metrics['R2']:.3f}")
 
 days_for_curve = np.arange(0, curve_end_day + 1)
 curve = predict_degradation_curve(

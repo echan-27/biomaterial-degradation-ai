@@ -32,6 +32,8 @@ Degradation percentage = 100 - Mass remaining percentage
 app.py                  Streamlit website
 data/degradationdata.xlsx
 models/best_model.pkl   Saved best model
+models/model_metrics.csv Held-out test metrics for each model
+models/test_predictions.csv Actual vs predicted test-set results
 src/clean_data.py       Loads and cleans the spreadsheet
 src/train_model.py      Trains and compares models
 src/predict.py          Loads the model and makes predictions
@@ -81,16 +83,32 @@ The models are evaluated with:
 - RMSE
 - R²
 
-The best model is selected by lowest RMSE on the held-out test set and saved to:
+The data is split into:
+
+- 80% training data
+- 20% test data
+
+Each model trains only on the training set. The test set is kept separate and is
+used only for evaluation. The best model is selected by lowest RMSE on the
+held-out test set and saved to:
 
 ```text
 models/best_model.pkl
 ```
 
+The saved model is the best model trained on the 80% training set. It is not
+retrained on the test set.
+
 The comparison table is also saved to:
 
 ```text
 models/model_metrics.csv
+```
+
+The test-set actual vs predicted values are saved to:
+
+```text
+models/test_predictions.csv
 ```
 
 ## Run the Website
@@ -107,6 +125,9 @@ inputs, and predicts:
 - mass remaining percentage
 - degradation percentage
 - degradation curve over time
+
+The website also shows held-out test-set MAE, RMSE, and R² from
+`models/model_metrics.csv`.
 
 ## Scientific Limitations
 

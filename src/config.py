@@ -12,6 +12,7 @@ DATA_PATH = PROJECT_ROOT / "data" / "degradationdata.xlsx"
 MODEL_PATH = PROJECT_ROOT / "models" / "best_model.pkl"
 METRICS_PATH = PROJECT_ROOT / "models" / "model_metrics.csv"
 SUMMARY_PATH = PROJECT_ROOT / "models" / "model_summary.json"
+TEST_PREDICTIONS_PATH = PROJECT_ROOT / "models" / "test_predictions.csv"
 
 TARGET_COLUMN = "Mass_Remaining_Percentage"
 
@@ -37,4 +38,3 @@ FEATURE_COLUMNS = [
     "Days_Elapsed",
     "degree_substitution",
 ]
-
