@@ -193,7 +193,7 @@ def main() -> None:
     }
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    print("Model comparison:")
+    print("Model comparison table (sorted by lowest RMSE):")
     print(metrics_table.to_string(index=False, float_format=lambda value: f"{value:.3f}"))
     print(f"\nBest model: {best_model_name}")
     print(f"Saved model to: {MODEL_PATH}")

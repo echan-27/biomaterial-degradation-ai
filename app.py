@@ -66,18 +66,30 @@ def read_model_summary() -> str:
         return "Saved model"
 
 
-def read_best_test_metrics() -> dict[str, float] | None:
-    """Read the best model's held-out test metrics from model_metrics.csv."""
+def read_model_metrics() -> pd.DataFrame:
+    """Read the full model comparison table from model_metrics.csv."""
     if not Path(METRICS_PATH).exists():
-        return None
+        return pd.DataFrame()
 
     try:
         metrics_table = pd.read_csv(METRICS_PATH)
     except Exception:
+        return pd.DataFrame()
+
+    required_columns = ["Model", "MAE", "RMSE", "R2"]
+    if metrics_table.empty or any(column not in metrics_table for column in required_columns):
+        return pd.DataFrame()
+
+    return metrics_table[required_columns].sort_values("RMSE").reset_index(drop=True)
+
+
+def read_best_test_metrics(metrics_table: pd.DataFrame) -> dict[str, float] | None:
+    """Read the best model's held-out test metrics from the comparison table."""
+    if metrics_table.empty:
         return None
 
     required_columns = ["MAE", "RMSE", "R2"]
-    if metrics_table.empty or any(column not in metrics_table for column in required_columns):
+    if any(column not in metrics_table for column in required_columns):
         return None
 
     best_row = metrics_table.sort_values("RMSE").iloc[0]
@@ -216,13 +228,29 @@ metric_columns[0].metric("Mass remaining", f"{mass_remaining:.1f}%")
 metric_columns[1].metric("Degradation", f"{degradation_percentage:.1f}%")
 metric_columns[2].metric("Model", read_model_summary())
 
-test_metrics = read_best_test_metrics()
+model_metrics = read_model_metrics()
+test_metrics = read_best_test_metrics(model_metrics)
 if test_metrics:
     st.subheader("Held-out test performance")
     performance_columns = st.columns(3)
     performance_columns[0].metric("MAE", f"{test_metrics['MAE']:.2f}")
     performance_columns[1].metric("RMSE", f"{test_metrics['RMSE']:.2f}")
     performance_columns[2].metric("R²", f"{test_metrics['R2']:.3f}")
+
+if not model_metrics.empty:
+    st.subheader("Model comparison")
+    display_metrics = model_metrics.rename(columns={"R2": "R²"})
+    st.dataframe(
+        display_metrics,
+        column_config={
+            "Model": st.column_config.TextColumn("Model"),
+            "MAE": st.column_config.NumberColumn("MAE", format="%.2f"),
+            "RMSE": st.column_config.NumberColumn("RMSE", format="%.2f"),
+            "R²": st.column_config.NumberColumn("R²", format="%.3f"),
+        },
+        width="stretch",
+        hide_index=True,
+    )
 
 days_for_curve = np.arange(0, curve_end_day + 1)
 curve = predict_degradation_curve(

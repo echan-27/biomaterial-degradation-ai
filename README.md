@@ -127,7 +127,7 @@ inputs, and predicts:
 - degradation curve over time
 
 The website also shows held-out test-set MAE, RMSE, and R² from
-`models/model_metrics.csv`.
+`models/model_metrics.csv`, plus the full model comparison table.
 
 ## Scientific Limitations
 
