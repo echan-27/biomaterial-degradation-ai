@@ -26,6 +26,15 @@ The app also reports degradation percentage:
 Degradation percentage = 100 - Mass remaining percentage
 ```
 
+The app reports uncertainty using the best model's held-out test RMSE:
+
+```text
+Predicted mass remaining: prediction ± RMSE
+Estimated range: prediction - RMSE to prediction + RMSE
+```
+
+The estimated range is clipped to stay between 0% and 100%.
+
 ## Project Files
 
 ```text
@@ -123,6 +132,7 @@ The website loads `models/best_model.pkl`, accepts material and environment
 inputs, and predicts:
 
 - mass remaining percentage
+- uncertainty estimate and estimated range
 - degradation percentage
 - degradation curve over time
 
@@ -140,6 +150,9 @@ This is a beginner-friendly research model, not a laboratory replacement.
 - The degradation curve is made from separate predictions at each time point.
   Because of that, the curve may not always be perfectly smooth or strictly
   decreasing.
+- The uncertainty estimate is based on overall test-set RMSE. It is a rough
+  typical-error estimate, not a formal confidence interval for a specific
+  material or environment.
 - The model uses simplified features and does not include every factor that can
   affect degradation, such as humidity, microbial activity, sample thickness,
   crystallinity, additives, or experimental measurement error.

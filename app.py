@@ -9,6 +9,7 @@ import streamlit as st
 from src.clean_data import get_category_options, load_training_data
 from src.config import DATA_PATH, METRICS_PATH, MODEL_PATH, SUMMARY_PATH
 from src.predict import (
+    calculate_uncertainty_range,
     load_model,
     predict_degradation_curve,
     predict_degradation_percentage,
@@ -223,13 +224,26 @@ mass_remaining = predict_mass_remaining(
 )
 degradation_percentage = predict_degradation_percentage(mass_remaining)
 
+model_metrics = read_model_metrics()
+test_metrics = read_best_test_metrics(model_metrics)
+uncertainty = test_metrics["RMSE"] if test_metrics else None
+
+st.subheader("Prediction")
+if uncertainty is not None:
+    lower_mass, upper_mass = calculate_uncertainty_range(mass_remaining, uncertainty)
+    st.write(f"Predicted mass remaining: **{mass_remaining:.1f}% ± {uncertainty:.1f}%**")
+    st.write(f"Estimated range: **{lower_mass:.1f}%–{upper_mass:.1f}%**")
+else:
+    st.write(f"Predicted mass remaining: **{mass_remaining:.1f}%**")
+
 metric_columns = st.columns(3)
-metric_columns[0].metric("Mass remaining", f"{mass_remaining:.1f}%")
+mass_metric_value = f"{mass_remaining:.1f}%"
+if uncertainty is not None:
+    mass_metric_value = f"{mass_remaining:.1f}% ± {uncertainty:.1f}%"
+metric_columns[0].metric("Predicted mass remaining", mass_metric_value)
 metric_columns[1].metric("Degradation", f"{degradation_percentage:.1f}%")
 metric_columns[2].metric("Model", read_model_summary())
 
-model_metrics = read_model_metrics()
-test_metrics = read_best_test_metrics(model_metrics)
 if test_metrics:
     st.subheader("Held-out test performance")
     performance_columns = st.columns(3)
@@ -262,6 +276,7 @@ curve = predict_degradation_curve(
     environment=environment,
     degree_substitution=degree_substitution,
     days=days_for_curve,
+    uncertainty=uncertainty,
 )
 
 st.subheader("Predicted degradation curve")

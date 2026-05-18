@@ -141,12 +141,24 @@ def save_test_predictions(
     best_model: Pipeline,
     X_test: pd.DataFrame,
     y_test: pd.Series,
+    uncertainty: float,
 ) -> None:
     """Save actual vs predicted mass remaining percentage for the test set."""
     predictions = best_model.predict(X_test)
     prediction_table = X_test.copy()
     prediction_table["Actual_Mass_Remaining_Percentage"] = y_test.to_numpy()
     prediction_table["Predicted_Mass_Remaining_Percentage"] = predictions
+    prediction_table["Uncertainty"] = uncertainty
+    prediction_table["Estimated_Lower_Mass_Remaining_Percentage"] = np.clip(
+        prediction_table["Predicted_Mass_Remaining_Percentage"] - uncertainty,
+        0,
+        100,
+    )
+    prediction_table["Estimated_Upper_Mass_Remaining_Percentage"] = np.clip(
+        prediction_table["Predicted_Mass_Remaining_Percentage"] + uncertainty,
+        0,
+        100,
+    )
     prediction_table["Prediction_Error"] = (
         prediction_table["Predicted_Mass_Remaining_Percentage"]
         - prediction_table["Actual_Mass_Remaining_Percentage"]
@@ -167,11 +179,12 @@ def main() -> None:
         test_rows,
     ) = train_and_compare_models(data)
     save_best_model(best_model)
-    save_test_predictions(best_model, X_test, y_test)
 
     METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     metrics_table.to_csv(METRICS_PATH, index=False)
     best_metrics = metrics_table.iloc[0]
+    uncertainty = float(best_metrics["RMSE"])
+    save_test_predictions(best_model, X_test, y_test, uncertainty)
 
     summary = {
         "best_model": best_model_name,
@@ -187,6 +200,10 @@ def main() -> None:
             "MAE": float(best_metrics["MAE"]),
             "RMSE": float(best_metrics["RMSE"]),
             "R2": float(best_metrics["R2"]),
+        },
+        "uncertainty_estimate": {
+            "method": "Use the best model's held-out test RMSE as +/- percentage points.",
+            "value": uncertainty,
         },
         "saved_model_path": str(MODEL_PATH.relative_to(PROJECT_ROOT)),
         "test_predictions_path": str(TEST_PREDICTIONS_PATH.relative_to(PROJECT_ROOT)),

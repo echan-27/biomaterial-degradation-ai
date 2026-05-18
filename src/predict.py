@@ -73,6 +73,16 @@ def predict_degradation_percentage(mass_remaining_percentage: float) -> float:
     return float(np.clip(100 - mass_remaining_percentage, 0, 100))
 
 
+def calculate_uncertainty_range(
+    prediction: float,
+    uncertainty: float,
+) -> tuple[float, float]:
+    """Create a 0-100% range around a prediction using the uncertainty value."""
+    lower_bound = float(np.clip(prediction - uncertainty, 0, 100))
+    upper_bound = float(np.clip(prediction + uncertainty, 0, 100))
+    return lower_bound, upper_bound
+
+
 def predict_degradation_curve(
     model,
     material_type: str,
@@ -82,6 +92,7 @@ def predict_degradation_curve(
     environment: str,
     degree_substitution: float,
     days: Iterable[float],
+    uncertainty: float | None = None,
 ) -> pd.DataFrame:
     """Predict mass remaining and degradation for many time points."""
     days_array = np.array(list(days), dtype=float)
@@ -109,4 +120,18 @@ def predict_degradation_curve(
         }
     )
     curve["Degradation_Percentage"] = 100 - curve["Mass_Remaining_Percentage"]
+
+    if uncertainty is not None:
+        curve["Uncertainty"] = float(uncertainty)
+        curve["Estimated_Lower_Mass_Remaining_Percentage"] = np.clip(
+            curve["Mass_Remaining_Percentage"] - uncertainty,
+            0,
+            100,
+        )
+        curve["Estimated_Upper_Mass_Remaining_Percentage"] = np.clip(
+            curve["Mass_Remaining_Percentage"] + uncertainty,
+            0,
+            100,
+        )
+
     return curve

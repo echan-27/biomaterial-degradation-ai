@@ -21,6 +21,10 @@
     "RMSE": 15.603180463347016,
     "R2": 0.695646301964576
   },
+  "uncertainty_estimate": {
+    "method": "Use the best model's held-out test RMSE as +/- percentage points.",
+    "value": 15.603180463347016
+  },
   "saved_model_path": "models/best_model.pkl",
   "test_predictions_path": "models/test_predictions.csv"
 }
