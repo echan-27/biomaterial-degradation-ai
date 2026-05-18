@@ -135,6 +135,7 @@ inputs, and predicts:
 - uncertainty estimate and estimated range
 - degradation percentage
 - degradation curve over time
+- comparison curves for two biomaterial/environment choices
 
 The website also shows held-out test-set MAE, RMSE, and R² from
 `models/model_metrics.csv`, plus the full model comparison table.
