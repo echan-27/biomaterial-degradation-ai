@@ -1,14 +1,19 @@
 # Biomaterial Degradation AI
 
-This project predicts how much mass a biomaterial may have remaining after a
-given number of days in a chosen environment. It uses a small scikit-learn
-regression model and a Streamlit website.
+This project predicts a biomaterial degradation rate constant `k`, then uses an
+exponential decay equation to estimate how much mass remains after a given
+number of days. It uses a small scikit-learn regression model and a Streamlit
+website.
 
 ## What the Model Predicts
 
-Target variable:
+Original measured target:
 
 - `Mass_Remaining_Percentage`
+
+Model target:
+
+- `Degradation_Rate_k`
 
 Input features:
 
@@ -17,8 +22,17 @@ Input features:
 - `Temperature_C`
 - `pH_Level`
 - `Environment`
-- `Days_Elapsed`
 - `degree_substitution`
+
+`Days_Elapsed` is not used as a normal model input for `k`. Instead, it is used
+inside the exponential decay equation:
+
+```text
+Mass remaining percentage = 100 * exp(-k * Days_Elapsed)
+```
+
+The app clips predicted `k` values to be non-negative. This physics-informed
+constraint prevents predicted mass remaining from increasing as time increases.
 
 The app also reports degradation percentage:
 
@@ -26,14 +40,16 @@ The app also reports degradation percentage:
 Degradation percentage = 100 - Mass remaining percentage
 ```
 
-The app reports uncertainty using the best model's held-out test RMSE:
+The app reports a simple estimated range using held-out test error for mass
+remaining:
 
 ```text
-Predicted mass remaining: prediction ± RMSE
-Estimated range: prediction - RMSE to prediction + RMSE
+Estimated range = predicted mass remaining ± test-set Mass MAE
 ```
 
-The estimated range is clipped to stay between 0% and 100%.
+The estimated range is clipped to stay between 0% and 100%. This is easier to
+interpret than propagating uncertainty through `k`, which can sometimes create
+unhelpful ranges like 0%–100%.
 
 ## Project Files
 
@@ -97,15 +113,17 @@ The data is split into:
 - 80% training data
 - 20% test data
 
-Each model trains only on the training set. The test set is kept separate and is
-used only for evaluation. The best model is selected by lowest RMSE on the
+The training script first fits `k` values from the measured mass remaining data
+using the exponential decay equation. Each machine learning model trains only on
+the training set of fitted `k` values. The test set is kept separate and is used
+only for evaluation. The best model is selected by lowest RMSE for `k` on the
 held-out test set and saved to:
 
 ```text
 models/best_model.pkl
 ```
 
-The saved model is the best model trained on the 80% training set. It is not
+The saved model is the best `k` model trained on the 80% training set. It is not
 retrained on the test set.
 
 The comparison table is also saved to:
@@ -128,11 +146,20 @@ After training, start the Streamlit app:
 python -m streamlit run app.py
 ```
 
-The website loads `models/best_model.pkl`, accepts material and environment
-inputs, and predicts:
+The website is organized into five tabs:
+
+- Predictor
+- Compare Materials
+- Model Performance
+- Dataset Explorer
+- About the Research
+
+It loads `models/best_model.pkl`, accepts material and environment inputs, and
+predicts:
 
 - mass remaining percentage
 - uncertainty estimate and estimated range
+- degradation rate constant `k`
 - degradation percentage
 - degradation curve over time
 - comparison curves for two biomaterial/environment choices
@@ -151,9 +178,9 @@ This is a beginner-friendly research model, not a laboratory replacement.
 - The degradation curve is made from separate predictions at each time point.
   Because of that, the curve may not always be perfectly smooth or strictly
   decreasing.
-- The uncertainty estimate is based on overall test-set RMSE. It is a rough
-  typical-error estimate, not a formal confidence interval for a specific
-  material or environment.
+- The uncertainty estimate is based on held-out test error for mass remaining.
+  It is a rough typical-error estimate, not a formal confidence interval for a
+  specific material or environment.
 - The model uses simplified features and does not include every factor that can
   affect degradation, such as humidity, microbial activity, sample thickness,
   crystallinity, additives, or experimental measurement error.

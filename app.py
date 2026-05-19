@@ -1,5 +1,6 @@
 """Streamlit app for predicting biomaterial degradation."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from src.predict import (
     calculate_uncertainty_range,
     load_model,
     predict_degradation_curve,
+    predict_degradation_rate,
     predict_degradation_percentage,
     predict_mass_remaining,
 )
@@ -46,6 +48,16 @@ def median_or_default(data: pd.DataFrame, column: str, default: float) -> float:
     return float(value)
 
 
+def min_or_default(data: pd.DataFrame, column: str, default: float) -> float:
+    """Use a dataset minimum when available; otherwise use a safe default."""
+    if data.empty or column not in data:
+        return default
+    value = data[column].min()
+    if pd.isna(value):
+        return default
+    return float(value)
+
+
 def max_or_default(data: pd.DataFrame, column: str, default: float) -> float:
     """Use a dataset maximum when available; otherwise use a safe default."""
     if data.empty or column not in data:
@@ -54,6 +66,15 @@ def max_or_default(data: pd.DataFrame, column: str, default: float) -> float:
     if pd.isna(value):
         return default
     return float(value)
+
+
+def make_key(*parts: object) -> str:
+    """Create a stable Streamlit widget key from readable parts."""
+    clean_parts = []
+    for part in parts:
+        text = str(part)
+        clean_parts.append("".join(char if char.isalnum() else "_" for char in text))
+    return "_".join(clean_parts)
 
 
 def default_feature_values(
@@ -97,15 +118,14 @@ def default_feature_values(
     }
 
 
-def read_model_summary() -> str:
-    """Return the saved model name if the training script wrote a summary file."""
+def read_model_summary() -> dict:
+    """Read training summary details saved by the training script."""
     if not Path(SUMMARY_PATH).exists():
-        return "Saved model"
+        return {}
     try:
-        summary = pd.read_json(SUMMARY_PATH, typ="series")
-        return str(summary.get("best_model", "Saved model"))
-    except ValueError:
-        return "Saved model"
+        return json.loads(Path(SUMMARY_PATH).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def read_model_metrics() -> pd.DataFrame:
@@ -142,12 +162,85 @@ def read_best_test_metrics(metrics_table: pd.DataFrame) -> dict[str, float] | No
     }
 
 
+def render_feature_inputs(
+    prefix: str,
+    defaults: dict[str, float],
+) -> dict[str, float]:
+    """Render compact numeric inputs for model features."""
+    first_row = st.columns(2)
+    second_row = st.columns(2)
+
+    with first_row[0]:
+        cellulose_percentage = st.number_input(
+            "Cellulose (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=defaults["cellulose_percentage"],
+            step=1.0,
+            key=make_key(prefix, "cellulose"),
+        )
+    with first_row[1]:
+        temperature_c = st.number_input(
+            "Temperature (C)",
+            min_value=-20.0,
+            max_value=100.0,
+            value=defaults["temperature_c"],
+            step=0.5,
+            key=make_key(prefix, "temperature"),
+        )
+    with second_row[0]:
+        ph_level = st.number_input(
+            "pH",
+            min_value=0.0,
+            max_value=14.0,
+            value=defaults["ph_level"],
+            step=0.1,
+            key=make_key(prefix, "ph"),
+        )
+    with second_row[1]:
+        degree_substitution = st.number_input(
+            "Degree of substitution",
+            min_value=0.0,
+            max_value=5.0,
+            value=max(0.0, min(5.0, defaults["degree_substitution"])),
+            step=0.01,
+            format="%.2f",
+            key=make_key(prefix, "degree_substitution"),
+        )
+
+    return {
+        "cellulose_percentage": cellulose_percentage,
+        "temperature_c": temperature_c,
+        "ph_level": ph_level,
+        "degree_substitution": degree_substitution,
+    }
+
+
+def format_metric_table(metrics_table: pd.DataFrame) -> pd.DataFrame:
+    """Rename R2 for display without changing saved CSV columns."""
+    return metrics_table.rename(columns={"R2": "R²"})
+
+
+def show_metric_explanations() -> None:
+    """Explain model metrics in beginner-friendly language."""
+    st.markdown(
+        """
+        - **MAE**: Average error in the predicted degradation rate `k`. Lower is better.
+        - **RMSE**: Similar to MAE, but it punishes larger `k` mistakes more. Lower is better.
+        - **R²**: How much of the `k` pattern the model explains. 1.0 is perfect, 0.0 is close to guessing the average.
+        """
+    )
+
+
 st.set_page_config(
     page_title="Biomaterial Degradation Predictor",
     layout="wide",
 )
 
 st.title("Biomaterial Degradation Predictor")
+st.caption(
+    "A small scikit-learn research app that predicts an exponential degradation rate."
+)
 
 try:
     model = get_model()
@@ -168,341 +261,394 @@ environments = (
     else DEFAULT_ENVIRONMENTS
 )
 
-with st.sidebar:
-    st.header("Inputs")
-
-    material_type = st.selectbox("Material type", materials)
-    environment = st.selectbox("Environment", environments)
-
-    matching_material = (
-        training_data[training_data["Material_Type"] == material_type]
-        if not training_data.empty
-        else pd.DataFrame()
-    )
-    matching_environment = (
-        training_data[training_data["Environment"] == environment]
-        if not training_data.empty
-        else pd.DataFrame()
-    )
-
-    cellulose_default = median_or_default(
-        matching_material,
-        "Cellulose_Percentage",
-        median_or_default(training_data, "Cellulose_Percentage", 60.0),
-    )
-    temperature_default = median_or_default(
-        matching_environment,
-        "Temperature_C",
-        median_or_default(training_data, "Temperature_C", 25.0),
-    )
-    ph_default = median_or_default(
-        matching_environment,
-        "pH_Level",
-        median_or_default(training_data, "pH_Level", 7.0),
-    )
-    day_default = int(round(median_or_default(training_data, "Days_Elapsed", 14.0)))
-    max_training_day = int(round(max_or_default(training_data, "Days_Elapsed", 365.0)))
-    max_app_day = max(30, max_training_day)
-    ds_default = median_or_default(
-        matching_material,
-        "degree_substitution",
-        median_or_default(training_data, "degree_substitution", 0.0),
-    )
-
-    cellulose_percentage = st.number_input(
-        "Cellulose percentage",
-        min_value=0.0,
-        max_value=100.0,
-        value=cellulose_default,
-        step=1.0,
-    )
-    temperature_c = st.number_input(
-        "Temperature (C)",
-        min_value=-20.0,
-        max_value=100.0,
-        value=temperature_default,
-        step=0.5,
-    )
-    ph_level = st.number_input(
-        "pH level",
-        min_value=0.0,
-        max_value=14.0,
-        value=ph_default,
-        step=0.1,
-    )
-    days_elapsed = st.number_input(
-        "Days elapsed",
-        min_value=0,
-        max_value=max_app_day,
-        value=max(0, min(max_app_day, day_default)),
-        step=1,
-    )
-    degree_substitution = st.number_input(
-        "Degree of substitution",
-        min_value=0.0,
-        max_value=5.0,
-        value=max(0.0, min(5.0, ds_default)),
-        step=0.01,
-        format="%.2f",
-    )
-    curve_end_day = st.slider(
-        "Curve end day",
-        min_value=1,
-        max_value=max_app_day,
-        value=max(30, int(days_elapsed)),
-        step=1,
-    )
-
-mass_remaining = predict_mass_remaining(
-    model=model,
-    material_type=material_type,
-    cellulose_percentage=cellulose_percentage,
-    temperature_c=temperature_c,
-    ph_level=ph_level,
-    environment=environment,
-    days_elapsed=days_elapsed,
-    degree_substitution=degree_substitution,
-)
-degradation_percentage = predict_degradation_percentage(mass_remaining)
-
+model_summary = read_model_summary()
 model_metrics = read_model_metrics()
 test_metrics = read_best_test_metrics(model_metrics)
-uncertainty = test_metrics["RMSE"] if test_metrics else None
+uncertainty_info = model_summary.get("uncertainty_estimate", {})
+mass_uncertainty = uncertainty_info.get("value")
 
-st.subheader("Prediction")
-if uncertainty is not None:
-    lower_mass, upper_mass = calculate_uncertainty_range(mass_remaining, uncertainty)
-    st.write(f"Predicted mass remaining: **{mass_remaining:.1f}% ± {uncertainty:.1f}%**")
-    st.write(f"Estimated range: **{lower_mass:.1f}%–{upper_mass:.1f}%**")
-else:
-    st.write(f"Predicted mass remaining: **{mass_remaining:.1f}%**")
+day_default = int(round(median_or_default(training_data, "Days_Elapsed", 14.0)))
+max_training_day = int(round(max_or_default(training_data, "Days_Elapsed", 365.0)))
+max_app_day = max(30, max_training_day)
 
-metric_columns = st.columns(3)
-mass_metric_value = f"{mass_remaining:.1f}%"
-if uncertainty is not None:
-    mass_metric_value = f"{mass_remaining:.1f}% ± {uncertainty:.1f}%"
-metric_columns[0].metric("Predicted mass remaining", mass_metric_value)
-metric_columns[1].metric("Degradation", f"{degradation_percentage:.1f}%")
-metric_columns[2].metric("Model", read_model_summary())
+predictor_tab, compare_tab, performance_tab, data_tab, about_tab = st.tabs(
+    [
+        "Predictor",
+        "Compare Materials",
+        "Model Performance",
+        "Dataset Explorer",
+        "About the Research",
+    ]
+)
 
-if test_metrics:
-    st.subheader("Held-out test performance")
-    performance_columns = st.columns(3)
-    performance_columns[0].metric("MAE", f"{test_metrics['MAE']:.2f}")
-    performance_columns[1].metric("RMSE", f"{test_metrics['RMSE']:.2f}")
-    performance_columns[2].metric("R²", f"{test_metrics['R2']:.3f}")
+with predictor_tab:
+    st.subheader("Single prediction")
 
-if not model_metrics.empty:
-    st.subheader("Model comparison")
-    display_metrics = model_metrics.rename(columns={"R2": "R²"})
-    st.dataframe(
-        display_metrics,
-        column_config={
-            "Model": st.column_config.TextColumn("Model"),
-            "MAE": st.column_config.NumberColumn("MAE", format="%.2f"),
-            "RMSE": st.column_config.NumberColumn("RMSE", format="%.2f"),
-            "R²": st.column_config.NumberColumn("R²", format="%.3f"),
-        },
-        width="stretch",
-        hide_index=True,
+    input_columns = st.columns([1, 1, 1])
+    with input_columns[0]:
+        material_type = st.selectbox(
+            "Material type",
+            materials,
+            key="predictor_material",
+        )
+    with input_columns[1]:
+        environment = st.selectbox(
+            "Environment",
+            environments,
+            key="predictor_environment",
+        )
+    with input_columns[2]:
+        days_elapsed = st.number_input(
+            "Days elapsed",
+            min_value=0,
+            max_value=max_app_day,
+            value=max(0, min(max_app_day, day_default)),
+            step=1,
+            key="predictor_days_elapsed",
+        )
+
+    defaults = default_feature_values(training_data, material_type, environment)
+    with st.expander("Adjust material and lab details"):
+        predictor_features = render_feature_inputs(
+            make_key("predictor", material_type, environment),
+            defaults,
+        )
+
+    predicted_k = predict_degradation_rate(
+        model=model,
+        material_type=material_type,
+        cellulose_percentage=predictor_features["cellulose_percentage"],
+        temperature_c=predictor_features["temperature_c"],
+        ph_level=predictor_features["ph_level"],
+        environment=environment,
+        degree_substitution=predictor_features["degree_substitution"],
+    )
+    mass_remaining = predict_mass_remaining(
+        model=model,
+        material_type=material_type,
+        cellulose_percentage=predictor_features["cellulose_percentage"],
+        temperature_c=predictor_features["temperature_c"],
+        ph_level=predictor_features["ph_level"],
+        environment=environment,
+        days_elapsed=days_elapsed,
+        degree_substitution=predictor_features["degree_substitution"],
+    )
+    degradation_percentage = predict_degradation_percentage(mass_remaining)
+
+    if mass_uncertainty is not None:
+        lower_mass, upper_mass = calculate_uncertainty_range(
+            mass_remaining,
+            mass_uncertainty,
+        )
+        mass_value = f"{mass_remaining:.1f}%"
+        range_value = f"{lower_mass:.1f}%–{upper_mass:.1f}%"
+    else:
+        mass_value = f"{mass_remaining:.1f}%"
+        range_value = "Not available"
+
+    result_columns = st.columns(4)
+    result_columns[0].metric("Predicted mass remaining", mass_value)
+    result_columns[1].metric("Estimated range", range_value)
+    result_columns[2].metric("Predicted degradation", f"{degradation_percentage:.1f}%")
+    result_columns[3].metric("Predicted k", f"{predicted_k:.5f}/day")
+
+    curve_end_day = st.slider(
+        "Curve length (days)",
+        min_value=1,
+        max_value=max_app_day,
+        value=min(max_app_day, max(30, int(days_elapsed))),
+        step=1,
+        key="predictor_curve_end_day",
+    )
+    days_for_curve = np.arange(0, curve_end_day + 1)
+    curve = predict_degradation_curve(
+        model=model,
+        material_type=material_type,
+        cellulose_percentage=predictor_features["cellulose_percentage"],
+        temperature_c=predictor_features["temperature_c"],
+        ph_level=predictor_features["ph_level"],
+        environment=environment,
+        degree_substitution=predictor_features["degree_substitution"],
+        days=days_for_curve,
+    )
+    curve_display = curve.rename(
+        columns={
+            "Mass_Remaining_Percentage": "Mass remaining (%)",
+            "Degradation_Percentage": "Degradation (%)",
+        }
     )
 
-days_for_curve = np.arange(0, curve_end_day + 1)
-curve = predict_degradation_curve(
-    model=model,
-    material_type=material_type,
-    cellulose_percentage=cellulose_percentage,
-    temperature_c=temperature_c,
-    ph_level=ph_level,
-    environment=environment,
-    degree_substitution=degree_substitution,
-    days=days_for_curve,
-    uncertainty=uncertainty,
-)
-
-st.subheader("Predicted degradation curve")
-st.line_chart(
-    curve,
-    x="Days_Elapsed",
-    y=["Mass_Remaining_Percentage", "Degradation_Percentage"],
-)
-
-with st.expander("Curve data"):
-    st.dataframe(curve, width="stretch", hide_index=True)
-
-st.subheader("Compare degradation curves")
-
-default_comparison_end_day = min(max_app_day, max(90, int(days_elapsed)))
-comparison_end_day = st.slider(
-    "Comparison period (days)",
-    min_value=1,
-    max_value=max_app_day,
-    value=default_comparison_end_day,
-    step=1,
-)
-
-material_b_index = 1 if len(materials) > 1 else 0
-environment_b_index = 1 if len(environments) > 1 else 0
-
-comparison_columns = st.columns(2)
-with comparison_columns[0]:
-    material_a = st.selectbox("Biomaterial A", materials, key="comparison_material_a")
-    environment_a = st.selectbox(
-        "Environment A",
-        environments,
-        key="comparison_environment_a",
+    st.line_chart(
+        curve_display,
+        x="Days_Elapsed",
+        y=["Mass remaining (%)", "Degradation (%)"],
     )
 
-with comparison_columns[1]:
-    material_b = st.selectbox(
-        "Biomaterial B",
-        materials,
-        index=material_b_index,
-        key="comparison_material_b",
+    with st.expander("Curve data"):
+        st.dataframe(curve_display, width="stretch", hide_index=True)
+
+with compare_tab:
+    st.subheader("Compare two scenarios")
+
+    comparison_end_day = st.slider(
+        "Comparison period (days)",
+        min_value=1,
+        max_value=max_app_day,
+        value=min(max_app_day, 90),
+        step=1,
+        key="comparison_period",
     )
-    environment_b = st.selectbox(
-        "Environment B",
-        environments,
-        index=environment_b_index,
-        key="comparison_environment_b",
+
+    material_b_index = 1 if len(materials) > 1 else 0
+    environment_b_index = 1 if len(environments) > 1 else 0
+
+    comparison_columns = st.columns(2)
+    with comparison_columns[0]:
+        st.markdown("**Scenario A**")
+        material_a = st.selectbox(
+            "Material",
+            materials,
+            key="comparison_material_a",
+        )
+        environment_a = st.selectbox(
+            "Environment",
+            environments,
+            key="comparison_environment_a",
+        )
+
+    with comparison_columns[1]:
+        st.markdown("**Scenario B**")
+        material_b = st.selectbox(
+            "Material",
+            materials,
+            index=material_b_index,
+            key="comparison_material_b",
+        )
+        environment_b = st.selectbox(
+            "Environment",
+            environments,
+            index=environment_b_index,
+            key="comparison_environment_b",
+        )
+
+    defaults_a = default_feature_values(training_data, material_a, environment_a)
+    defaults_b = default_feature_values(training_data, material_b, environment_b)
+
+    with st.expander("Adjust comparison details"):
+        settings_columns = st.columns(2)
+        with settings_columns[0]:
+            st.markdown("**Scenario A details**")
+            features_a = render_feature_inputs(
+                make_key("compare_a", material_a, environment_a),
+                defaults_a,
+            )
+        with settings_columns[1]:
+            st.markdown("**Scenario B details**")
+            features_b = render_feature_inputs(
+                make_key("compare_b", material_b, environment_b),
+                defaults_b,
+            )
+
+    comparison_days = np.arange(0, comparison_end_day + 1)
+    curve_a = predict_degradation_curve(
+        model=model,
+        material_type=material_a,
+        cellulose_percentage=features_a["cellulose_percentage"],
+        temperature_c=features_a["temperature_c"],
+        ph_level=features_a["ph_level"],
+        environment=environment_a,
+        degree_substitution=features_a["degree_substitution"],
+        days=comparison_days,
+    )
+    curve_b = predict_degradation_curve(
+        model=model,
+        material_type=material_b,
+        cellulose_percentage=features_b["cellulose_percentage"],
+        temperature_c=features_b["temperature_c"],
+        ph_level=features_b["ph_level"],
+        environment=environment_b,
+        degree_substitution=features_b["degree_substitution"],
+        days=comparison_days,
     )
 
-defaults_a = default_feature_values(training_data, material_a, environment_a)
-defaults_b = default_feature_values(training_data, material_b, environment_b)
+    label_a = f"A: {material_a} in {environment_a}"
+    label_b = f"B: {material_b} in {environment_b}"
+    comparison_curve = pd.DataFrame(
+        {
+            "Days elapsed": comparison_days,
+            label_a: curve_a["Degradation_Percentage"],
+            label_b: curve_b["Degradation_Percentage"],
+        }
+    )
 
-with st.expander("Comparison settings"):
-    settings_columns = st.columns(2)
-    with settings_columns[0]:
-        st.markdown("**Curve A**")
-        cellulose_a = st.number_input(
-            "A cellulose percentage",
-            min_value=0.0,
-            max_value=100.0,
-            value=defaults_a["cellulose_percentage"],
-            step=1.0,
-            key=f"cellulose_a_{material_a}_{environment_a}",
-        )
-        temperature_a = st.number_input(
-            "A temperature (C)",
-            min_value=-20.0,
-            max_value=100.0,
-            value=defaults_a["temperature_c"],
-            step=0.5,
-            key=f"temperature_a_{material_a}_{environment_a}",
-        )
-        ph_a = st.number_input(
-            "A pH level",
-            min_value=0.0,
-            max_value=14.0,
-            value=defaults_a["ph_level"],
-            step=0.1,
-            key=f"ph_a_{material_a}_{environment_a}",
-        )
-        degree_substitution_a = st.number_input(
-            "A degree of substitution",
-            min_value=0.0,
-            max_value=5.0,
-            value=max(0.0, min(5.0, defaults_a["degree_substitution"])),
-            step=0.01,
-            format="%.2f",
-            key=f"degree_substitution_a_{material_a}_{environment_a}",
-        )
+    final_columns = st.columns(2)
+    final_columns[0].metric(
+        "A final degradation",
+        f"{curve_a['Degradation_Percentage'].iloc[-1]:.1f}%",
+    )
+    final_columns[1].metric(
+        "B final degradation",
+        f"{curve_b['Degradation_Percentage'].iloc[-1]:.1f}%",
+    )
 
-    with settings_columns[1]:
-        st.markdown("**Curve B**")
-        cellulose_b = st.number_input(
-            "B cellulose percentage",
-            min_value=0.0,
-            max_value=100.0,
-            value=defaults_b["cellulose_percentage"],
-            step=1.0,
-            key=f"cellulose_b_{material_b}_{environment_b}",
-        )
-        temperature_b = st.number_input(
-            "B temperature (C)",
-            min_value=-20.0,
-            max_value=100.0,
-            value=defaults_b["temperature_c"],
-            step=0.5,
-            key=f"temperature_b_{material_b}_{environment_b}",
-        )
-        ph_b = st.number_input(
-            "B pH level",
-            min_value=0.0,
-            max_value=14.0,
-            value=defaults_b["ph_level"],
-            step=0.1,
-            key=f"ph_b_{material_b}_{environment_b}",
-        )
-        degree_substitution_b = st.number_input(
-            "B degree of substitution",
-            min_value=0.0,
-            max_value=5.0,
-            value=max(0.0, min(5.0, defaults_b["degree_substitution"])),
-            step=0.01,
-            format="%.2f",
-            key=f"degree_substitution_b_{material_b}_{environment_b}",
+    st.line_chart(comparison_curve, x="Days elapsed", y=[label_a, label_b])
+
+    comparison_data = pd.DataFrame(
+        {
+            "Days elapsed": comparison_days,
+            f"{label_a} mass remaining (%)": curve_a["Mass_Remaining_Percentage"],
+            f"{label_a} degradation (%)": curve_a["Degradation_Percentage"],
+            f"{label_b} mass remaining (%)": curve_b["Mass_Remaining_Percentage"],
+            f"{label_b} degradation (%)": curve_b["Degradation_Percentage"],
+        }
+    )
+
+    with st.expander("Comparison data"):
+        st.dataframe(comparison_data, width="stretch", hide_index=True)
+
+with performance_tab:
+    st.subheader("Model performance")
+
+    best_model_name = model_summary.get("best_model", "Saved model")
+    train_rows = model_summary.get("train_rows", "N/A")
+    test_rows = model_summary.get("test_rows", "N/A")
+
+    summary_columns = st.columns(3)
+    summary_columns[0].metric("Best model", best_model_name)
+    summary_columns[1].metric("Training rows", train_rows)
+    summary_columns[2].metric("Test rows", test_rows)
+
+    if test_metrics:
+        metric_columns = st.columns(3)
+        metric_columns[0].metric("MAE", f"{test_metrics['MAE']:.5f}")
+        metric_columns[1].metric("RMSE", f"{test_metrics['RMSE']:.5f}")
+        metric_columns[2].metric("R²", f"{test_metrics['R2']:.3f}")
+
+    show_metric_explanations()
+
+    mass_metrics = model_summary.get("mass_prediction_test_metrics", {})
+    if mass_metrics:
+        st.markdown("**Mass remaining error on held-out test conditions**")
+        mass_columns = st.columns(2)
+        mass_columns[0].metric("Mass MAE", f"{mass_metrics['MAE']:.1f} points")
+        mass_columns[1].metric("Mass RMSE", f"{mass_metrics['RMSE']:.1f} points")
+        st.caption(
+            "The Predictor tab uses Mass MAE as a simple typical-error range. "
+            "This avoids the very wide 0%–100% ranges that came from propagating k uncertainty."
         )
 
-comparison_days = np.arange(0, comparison_end_day + 1)
-curve_a = predict_degradation_curve(
-    model=model,
-    material_type=material_a,
-    cellulose_percentage=cellulose_a,
-    temperature_c=temperature_a,
-    ph_level=ph_a,
-    environment=environment_a,
-    degree_substitution=degree_substitution_a,
-    days=comparison_days,
-    uncertainty=uncertainty,
-)
-curve_b = predict_degradation_curve(
-    model=model,
-    material_type=material_b,
-    cellulose_percentage=cellulose_b,
-    temperature_c=temperature_b,
-    ph_level=ph_b,
-    environment=environment_b,
-    degree_substitution=degree_substitution_b,
-    days=comparison_days,
-    uncertainty=uncertainty,
-)
+    if not model_metrics.empty:
+        st.markdown("**Model comparison on the held-out test set**")
+        st.dataframe(
+            format_metric_table(model_metrics),
+            column_config={
+                "Model": st.column_config.TextColumn("Model"),
+                "MAE": st.column_config.NumberColumn("MAE", format="%.5f"),
+                "RMSE": st.column_config.NumberColumn("RMSE", format="%.5f"),
+                "R²": st.column_config.NumberColumn("R²", format="%.3f"),
+            },
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("Run `python src/train_model.py` to generate model metrics.")
 
-label_a = f"A: {material_a} in {environment_a}"
-label_b = f"B: {material_b} in {environment_b}"
-comparison_curve = pd.DataFrame(
-    {
-        "Days_Elapsed": comparison_days,
-        label_a: curve_a["Degradation_Percentage"],
-        label_b: curve_b["Degradation_Percentage"],
-    }
-)
+with data_tab:
+    st.subheader("Dataset explorer")
 
-final_columns = st.columns(2)
-final_columns[0].metric(
-    "A final degradation",
-    f"{curve_a['Degradation_Percentage'].iloc[-1]:.1f}%",
-)
-final_columns[1].metric(
-    "B final degradation",
-    f"{curve_b['Degradation_Percentage'].iloc[-1]:.1f}%",
-)
+    if training_data.empty:
+        st.warning("No dataset could be loaded.")
+    else:
+        data_columns = st.columns(4)
+        data_columns[0].metric("Rows", len(training_data))
+        data_columns[1].metric("Materials", training_data["Material_Type"].nunique())
+        data_columns[2].metric("Environments", training_data["Environment"].nunique())
+        data_columns[3].metric(
+            "Day range",
+            f"{int(min_or_default(training_data, 'Days_Elapsed', 0))}–{int(max_app_day)}",
+        )
 
-st.line_chart(comparison_curve, x="Days_Elapsed", y=[label_a, label_b])
+        filter_columns = st.columns([1, 1, 1])
+        with filter_columns[0]:
+            selected_materials = st.multiselect(
+                "Filter materials",
+                materials,
+                default=[],
+                placeholder="All materials",
+            )
+        with filter_columns[1]:
+            selected_environments = st.multiselect(
+                "Filter environments",
+                environments,
+                default=[],
+                placeholder="All environments",
+            )
+        with filter_columns[2]:
+            min_day = int(min_or_default(training_data, "Days_Elapsed", 0))
+            max_day = int(max_or_default(training_data, "Days_Elapsed", max_app_day))
+            selected_day_range = st.slider(
+                "Filter days",
+                min_value=min_day,
+                max_value=max_day,
+                value=(min_day, max_day),
+            )
 
-comparison_data = pd.DataFrame(
-    {
-        "Days_Elapsed": comparison_days,
-        f"{label_a} Mass_Remaining_Percentage": curve_a[
-            "Mass_Remaining_Percentage"
-        ],
-        f"{label_a} Degradation_Percentage": curve_a["Degradation_Percentage"],
-        f"{label_b} Mass_Remaining_Percentage": curve_b[
-            "Mass_Remaining_Percentage"
-        ],
-        f"{label_b} Degradation_Percentage": curve_b["Degradation_Percentage"],
-    }
-)
+        filtered_data = training_data.copy()
+        if selected_materials:
+            filtered_data = filtered_data[
+                filtered_data["Material_Type"].isin(selected_materials)
+            ]
+        if selected_environments:
+            filtered_data = filtered_data[
+                filtered_data["Environment"].isin(selected_environments)
+            ]
+        filtered_data = filtered_data[
+            filtered_data["Days_Elapsed"].between(
+                selected_day_range[0],
+                selected_day_range[1],
+            )
+        ]
 
-with st.expander("Comparison data"):
-    st.dataframe(comparison_data, width="stretch", hide_index=True)
+        st.metric("Filtered rows", len(filtered_data))
+        st.dataframe(filtered_data, width="stretch", hide_index=True, height=360)
+
+with about_tab:
+    st.subheader("About the research")
+
+    st.markdown(
+        """
+        This project estimates how much mass a biomaterial may have remaining after
+        exposure to a chosen environment for a chosen amount of time. The target
+        shown to users is `Mass_Remaining_Percentage`.
+
+        The machine learning model predicts a degradation rate constant called
+        `k`. The app then uses the exponential decay equation
+        `mass remaining = 100 * exp(-k * days)` to make predictions over time.
+        Since `k` is kept non-negative, the predicted mass remaining cannot
+        increase as days elapsed increases.
+        """
+    )
+
+    st.markdown("**Features used by the model**")
+    st.markdown(
+        """
+        - Material type
+        - Cellulose percentage
+        - Temperature
+        - pH
+        - Environment
+        - Degree of substitution
+        """
+    )
+
+    st.markdown("**Important limitations**")
+    st.markdown(
+        """
+        - Predictions are only as reliable as the dataset used for training.
+        - The estimated range is based on held-out test error for mass remaining.
+          It is a rough typical-error range, not a formal confidence interval.
+        - Real degradation can depend on factors not included here, such as
+          humidity, microbial activity, sample thickness, and measurement error.
+        - Use the predictions as a research guide, not as proof of laboratory results.
+        """
+    )

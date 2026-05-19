@@ -15,6 +15,7 @@ SUMMARY_PATH = PROJECT_ROOT / "models" / "model_summary.json"
 TEST_PREDICTIONS_PATH = PROJECT_ROOT / "models" / "test_predictions.csv"
 
 TARGET_COLUMN = "Mass_Remaining_Percentage"
+RATE_TARGET_COLUMN = "Degradation_Rate_k"
 
 CATEGORICAL_FEATURES = [
     "Material_Type",
@@ -36,5 +37,21 @@ FEATURE_COLUMNS = [
     "pH_Level",
     "Environment",
     "Days_Elapsed",
+    "degree_substitution",
+]
+
+RATE_NUMERIC_FEATURES = [
+    "Cellulose_Percentage",
+    "Temperature_C",
+    "pH_Level",
+    "degree_substitution",
+]
+
+RATE_FEATURE_COLUMNS = [
+    "Material_Type",
+    "Cellulose_Percentage",
+    "Temperature_C",
+    "pH_Level",
+    "Environment",
     "degree_substitution",
 ]

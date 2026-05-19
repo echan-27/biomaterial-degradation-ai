@@ -1,29 +1,44 @@
 {
-  "best_model": "GradientBoostingRegressor",
-  "selection_rule": "Lowest RMSE on the held-out test set",
-  "rows_used": 311,
-  "train_rows": 248,
-  "test_rows": 63,
+  "best_model": "RandomForestRegressor",
+  "model_target": "Degradation_Rate_k",
+  "curve_equation": "Mass_Remaining_Percentage = 100 * exp(-k * Days_Elapsed)",
+  "physics_constraint": "Predicted k is clipped to be non-negative, so mass remaining cannot increase over time.",
+  "selection_rule": "Lowest RMSE for predicted k on the held-out test set",
+  "raw_rows_used": 311,
+  "fitted_rate_rows_used": 248,
+  "train_rows": 198,
+  "test_rows": 50,
   "test_size": 0.2,
   "data_path": "data/degradationdata.xlsx",
   "target_column": "Mass_Remaining_Percentage",
+  "rate_target_column": "Degradation_Rate_k",
   "feature_columns": [
     "Material_Type",
     "Cellulose_Percentage",
     "Temperature_C",
     "pH_Level",
     "Environment",
-    "Days_Elapsed",
     "degree_substitution"
   ],
   "best_model_test_metrics": {
-    "MAE": 9.44300811934466,
-    "RMSE": 15.603180463347016,
-    "R2": 0.695646301964576
+    "MAE": 0.027656532374270505,
+    "RMSE": 0.06358630607220035,
+    "R2": 0.6215297212512862
+  },
+  "mass_prediction_test_metrics": {
+    "MAE": 14.6722260295069,
+    "RMSE": 27.10184922826271,
+    "MedianAbsoluteError": 5.782129108731212
   },
   "uncertainty_estimate": {
-    "method": "Use the best model's held-out test RMSE as +/- percentage points.",
-    "value": 15.603180463347016
+    "method": "Use held-out test MAE for mass remaining as +/- percentage points.",
+    "value": 14.6722260295069,
+    "unit": "percentage points"
+  },
+  "rate_uncertainty_estimate": {
+    "method": "Use the best model's held-out test RMSE for k.",
+    "value": 0.06358630607220035,
+    "unit": "1/day"
   },
   "saved_model_path": "models/best_model.pkl",
   "test_predictions_path": "models/test_predictions.csv"

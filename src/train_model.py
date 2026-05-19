@@ -1,4 +1,4 @@
-"""Train and compare regression models for biomaterial degradation."""
+"""Train models that predict the exponential degradation rate constant k."""
 
 import json
 import sys
@@ -25,26 +25,86 @@ from src.clean_data import load_training_data
 from src.config import (
     CATEGORICAL_FEATURES,
     DATA_PATH,
-    FEATURE_COLUMNS,
     METRICS_PATH,
     MODEL_PATH,
-    NUMERIC_FEATURES,
     PROJECT_ROOT,
+    RATE_FEATURE_COLUMNS,
+    RATE_NUMERIC_FEATURES,
+    RATE_TARGET_COLUMN,
     SUMMARY_PATH,
     TARGET_COLUMN,
     TEST_PREDICTIONS_PATH,
 )
+from src.predict import mass_remaining_from_k
 
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
+MIN_MASS_FRACTION = 0.001
+
+
+def fit_rate_constant_for_group(group: pd.DataFrame) -> dict:
+    """Fit k for one material/environment condition.
+
+    We use the exponential decay equation:
+
+        mass remaining = 100 * exp(-k * days)
+
+    Taking the natural log gives:
+
+        log(mass remaining / 100) = -k * days
+
+    This function fits the slope through the origin, then clips k so it cannot
+    be negative. A non-negative k makes the predicted curve decrease or stay
+    flat over time.
+    """
+    valid = group[group["Days_Elapsed"] > 0].copy()
+    days = valid["Days_Elapsed"].to_numpy(dtype=float)
+    mass_fraction = (valid[TARGET_COLUMN].to_numpy(dtype=float) / 100).clip(
+        MIN_MASS_FRACTION,
+        1.0,
+    )
+
+    denominator = np.sum(days**2)
+    if denominator == 0:
+        fitted_k = 0.0
+    else:
+        fitted_k = -np.sum(days * np.log(mass_fraction)) / denominator
+
+    fitted_k = max(float(fitted_k), 0.0)
+    fitted_mass = mass_remaining_from_k(fitted_k, days)
+    fit_rmse = np.sqrt(mean_squared_error(valid[TARGET_COLUMN], fitted_mass))
+
+    return {
+        RATE_TARGET_COLUMN: fitted_k,
+        "Curve_Fit_RMSE": fit_rmse,
+        "Number_Of_Timepoints": int(len(valid)),
+        "Evaluation_Day": float(valid["Days_Elapsed"].max()),
+    }
+
+
+def build_rate_dataset(data: pd.DataFrame) -> pd.DataFrame:
+    """Convert raw mass remaining measurements into one k value per condition."""
+    rows = []
+
+    grouped = data.groupby(RATE_FEATURE_COLUMNS, dropna=False)
+    for condition_values, group in grouped:
+        if not isinstance(condition_values, tuple):
+            condition_values = (condition_values,)
+
+        rate_row = dict(zip(RATE_FEATURE_COLUMNS, condition_values))
+        rate_row.update(fit_rate_constant_for_group(group))
+        rows.append(rate_row)
+
+    rate_data = pd.DataFrame(rows)
+    return rate_data.dropna(subset=RATE_FEATURE_COLUMNS + [RATE_TARGET_COLUMN])
 
 
 def build_preprocessor() -> ColumnTransformer:
-    """Create the preprocessing steps required by AGENTS.md."""
+    """Create the preprocessing steps for the k prediction model."""
     return ColumnTransformer(
         transformers=[
-            ("numeric", StandardScaler(), NUMERIC_FEATURES),
+            ("numeric", StandardScaler(), RATE_NUMERIC_FEATURES),
             (
                 "categorical",
                 OneHotEncoder(handle_unknown="ignore", sparse_output=False),
@@ -76,30 +136,35 @@ def build_model(model_name: str) -> Pipeline:
     )
 
 
+def predict_non_negative_k(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
+    """Predict k and apply the physics-informed non-negative constraint."""
+    return np.clip(model.predict(X), 0, None)
+
+
 def evaluate_model(model: Pipeline, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
-    """Calculate the requested regression metrics."""
-    predictions = model.predict(X_test)
-    rmse = np.sqrt(mean_squared_error(y_test, predictions))
+    """Calculate model metrics for predicting k."""
+    predicted_k = predict_non_negative_k(model, X_test)
+    rmse = np.sqrt(mean_squared_error(y_test, predicted_k))
     return {
-        "MAE": mean_absolute_error(y_test, predictions),
+        "MAE": mean_absolute_error(y_test, predicted_k),
         "RMSE": rmse,
-        "R2": r2_score(y_test, predictions),
+        "R2": r2_score(y_test, predicted_k),
     }
 
 
 def train_and_compare_models(
-    data: pd.DataFrame,
+    rate_data: pd.DataFrame,
 ) -> tuple[pd.DataFrame, str, Pipeline, pd.DataFrame, pd.Series, int, int]:
-    """Train models on 80% of the data and evaluate on the held-out 20%."""
-    X = data[FEATURE_COLUMNS]
-    y = data[TARGET_COLUMN]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
+    """Train models on 80% of the fitted k values and evaluate on 20%."""
+    train_data, test_data = train_test_split(
+        rate_data,
         test_size=TEST_SIZE,
         random_state=RANDOM_STATE,
     )
+    X_train = train_data[RATE_FEATURE_COLUMNS]
+    y_train = train_data[RATE_TARGET_COLUMN]
+    X_test = test_data[RATE_FEATURE_COLUMNS]
+    y_test = test_data[RATE_TARGET_COLUMN]
 
     results = []
     trained_models = {}
@@ -124,7 +189,7 @@ def train_and_compare_models(
         metrics_table,
         best_model_name,
         best_model,
-        X_test,
+        test_data.reset_index(drop=True),
         y_test,
         len(X_train),
         len(X_test),
@@ -132,7 +197,7 @@ def train_and_compare_models(
 
 
 def save_best_model(best_model: Pipeline) -> None:
-    """Save the best model that was trained only on the training set."""
+    """Save the best k prediction model trained only on the training set."""
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(best_model, MODEL_PATH)
 
@@ -141,34 +206,61 @@ def save_test_predictions(
     best_model: Pipeline,
     X_test: pd.DataFrame,
     y_test: pd.Series,
-    uncertainty: float,
-) -> None:
-    """Save actual vs predicted mass remaining percentage for the test set."""
-    predictions = best_model.predict(X_test)
-    prediction_table = X_test.copy()
-    prediction_table["Actual_Mass_Remaining_Percentage"] = y_test.to_numpy()
-    prediction_table["Predicted_Mass_Remaining_Percentage"] = predictions
-    prediction_table["Uncertainty"] = uncertainty
-    prediction_table["Estimated_Lower_Mass_Remaining_Percentage"] = np.clip(
-        prediction_table["Predicted_Mass_Remaining_Percentage"] - uncertainty,
-        0,
-        100,
+    k_uncertainty: float,
+) -> dict[str, float]:
+    """Save actual vs predicted k and mass remaining for the test set."""
+    X_test_features = X_test[RATE_FEATURE_COLUMNS]
+    predicted_k = predict_non_negative_k(best_model, X_test_features)
+    extra_columns = ["Curve_Fit_RMSE", "Number_Of_Timepoints", "Evaluation_Day"]
+    prediction_table = X_test[RATE_FEATURE_COLUMNS + extra_columns].copy()
+    prediction_table["Actual_Degradation_Rate_k"] = y_test.to_numpy()
+    prediction_table["Predicted_Degradation_Rate_k"] = predicted_k
+
+    # Use each row's maximum observed day as a common point to compare actual
+    # and predicted mass remaining from the exponential curves.
+    evaluation_days = prediction_table["Evaluation_Day"].to_numpy(dtype=float)
+    actual_mass = mass_remaining_from_k(
+        prediction_table["Actual_Degradation_Rate_k"].to_numpy(dtype=float),
+        evaluation_days,
     )
-    prediction_table["Estimated_Upper_Mass_Remaining_Percentage"] = np.clip(
-        prediction_table["Predicted_Mass_Remaining_Percentage"] + uncertainty,
-        0,
-        100,
-    )
+    predicted_mass = mass_remaining_from_k(predicted_k, evaluation_days)
+
+    prediction_table["Actual_Mass_Remaining_Percentage"] = actual_mass
+    prediction_table["Predicted_Mass_Remaining_Percentage"] = predicted_mass
     prediction_table["Prediction_Error"] = (
         prediction_table["Predicted_Mass_Remaining_Percentage"]
         - prediction_table["Actual_Mass_Remaining_Percentage"]
     )
+    absolute_errors = prediction_table["Prediction_Error"].abs()
+    mass_mae = float(absolute_errors.mean())
+    mass_rmse = float(np.sqrt(np.mean(prediction_table["Prediction_Error"] ** 2)))
+    mass_median_absolute_error = float(absolute_errors.median())
+
+    prediction_table["Mass_Uncertainty_Percentage_Points"] = mass_mae
+    prediction_table["Estimated_Lower_Mass_Remaining_Percentage"] = np.clip(
+        prediction_table["Predicted_Mass_Remaining_Percentage"] - mass_mae,
+        0,
+        100,
+    )
+    prediction_table["Estimated_Upper_Mass_Remaining_Percentage"] = np.clip(
+        prediction_table["Predicted_Mass_Remaining_Percentage"] + mass_mae,
+        0,
+        100,
+    )
+    prediction_table["Rate_Uncertainty_k"] = k_uncertainty
     prediction_table.to_csv(TEST_PREDICTIONS_PATH, index=False)
+
+    return {
+        "MAE": mass_mae,
+        "RMSE": mass_rmse,
+        "MedianAbsoluteError": mass_median_absolute_error,
+    }
 
 
 def main() -> None:
     """Run the complete training workflow."""
-    data = load_training_data()
+    raw_data = load_training_data()
+    rate_data = build_rate_dataset(raw_data)
     (
         metrics_table,
         best_model_name,
@@ -177,41 +269,53 @@ def main() -> None:
         y_test,
         train_rows,
         test_rows,
-    ) = train_and_compare_models(data)
+    ) = train_and_compare_models(rate_data)
     save_best_model(best_model)
 
     METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     metrics_table.to_csv(METRICS_PATH, index=False)
     best_metrics = metrics_table.iloc[0]
-    uncertainty = float(best_metrics["RMSE"])
-    save_test_predictions(best_model, X_test, y_test, uncertainty)
+    k_uncertainty = float(best_metrics["RMSE"])
+    mass_metrics = save_test_predictions(best_model, X_test, y_test, k_uncertainty)
 
     summary = {
         "best_model": best_model_name,
-        "selection_rule": "Lowest RMSE on the held-out test set",
-        "rows_used": int(len(data)),
+        "model_target": RATE_TARGET_COLUMN,
+        "curve_equation": "Mass_Remaining_Percentage = 100 * exp(-k * Days_Elapsed)",
+        "physics_constraint": "Predicted k is clipped to be non-negative, so mass remaining cannot increase over time.",
+        "selection_rule": "Lowest RMSE for predicted k on the held-out test set",
+        "raw_rows_used": int(len(raw_data)),
+        "fitted_rate_rows_used": int(len(rate_data)),
         "train_rows": int(train_rows),
         "test_rows": int(test_rows),
         "test_size": TEST_SIZE,
         "data_path": str(DATA_PATH.relative_to(PROJECT_ROOT)),
         "target_column": TARGET_COLUMN,
-        "feature_columns": FEATURE_COLUMNS,
+        "rate_target_column": RATE_TARGET_COLUMN,
+        "feature_columns": RATE_FEATURE_COLUMNS,
         "best_model_test_metrics": {
             "MAE": float(best_metrics["MAE"]),
             "RMSE": float(best_metrics["RMSE"]),
             "R2": float(best_metrics["R2"]),
         },
+        "mass_prediction_test_metrics": mass_metrics,
         "uncertainty_estimate": {
-            "method": "Use the best model's held-out test RMSE as +/- percentage points.",
-            "value": uncertainty,
+            "method": "Use held-out test MAE for mass remaining as +/- percentage points.",
+            "value": mass_metrics["MAE"],
+            "unit": "percentage points",
+        },
+        "rate_uncertainty_estimate": {
+            "method": "Use the best model's held-out test RMSE for k.",
+            "value": k_uncertainty,
+            "unit": "1/day",
         },
         "saved_model_path": str(MODEL_PATH.relative_to(PROJECT_ROOT)),
         "test_predictions_path": str(TEST_PREDICTIONS_PATH.relative_to(PROJECT_ROOT)),
     }
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    print("Model comparison table (sorted by lowest RMSE):")
-    print(metrics_table.to_string(index=False, float_format=lambda value: f"{value:.3f}"))
+    print("Model comparison table for degradation rate k (sorted by lowest RMSE):")
+    print(metrics_table.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
     print(f"\nBest model: {best_model_name}")
     print(f"Saved model to: {MODEL_PATH}")
 

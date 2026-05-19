@@ -7,7 +7,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src.config import FEATURE_COLUMNS, MODEL_PATH
+from src.config import MODEL_PATH, RATE_FEATURE_COLUMNS
 
 
 def load_model(model_path: Path = MODEL_PATH):
@@ -28,7 +28,6 @@ def make_input_dataframe(
     temperature_c: float,
     ph_level: float,
     environment: str,
-    days_elapsed: float,
     degree_substitution: float,
 ) -> pd.DataFrame:
     """Create a one-row table with the exact feature columns the model expects."""
@@ -38,10 +37,69 @@ def make_input_dataframe(
         "Temperature_C": temperature_c,
         "pH_Level": ph_level,
         "Environment": environment,
-        "Days_Elapsed": days_elapsed,
         "degree_substitution": degree_substitution,
     }
-    return pd.DataFrame([row], columns=FEATURE_COLUMNS)
+    return pd.DataFrame([row], columns=RATE_FEATURE_COLUMNS)
+
+
+def mass_remaining_from_k(
+    k_value: float | np.ndarray,
+    days_elapsed: float | np.ndarray,
+) -> float | np.ndarray:
+    """Calculate mass remaining from the exponential decay equation.
+
+    The equation is:
+
+        mass remaining = 100 * exp(-k * days)
+
+    Because k is clipped to be non-negative, mass remaining cannot increase as
+    days elapsed increases.
+    """
+    non_negative_k = np.maximum(np.array(k_value, dtype=float), 0.0)
+    days = np.maximum(np.array(days_elapsed, dtype=float), 0.0)
+    mass_remaining = 100 * np.exp(-non_negative_k * days)
+    mass_remaining = np.clip(mass_remaining, 0, 100)
+
+    if np.isscalar(k_value) and np.isscalar(days_elapsed):
+        return float(mass_remaining)
+    return mass_remaining
+
+
+def calculate_mass_range_from_k_uncertainty(
+    k_value: float,
+    k_uncertainty: float,
+    days_elapsed: float,
+) -> tuple[float, float]:
+    """Create a mass remaining range from uncertainty in predicted k."""
+    lower_k = max(k_value - k_uncertainty, 0.0)
+    upper_k = max(k_value + k_uncertainty, 0.0)
+
+    # A smaller k means slower degradation and more remaining mass.
+    upper_mass = float(mass_remaining_from_k(lower_k, days_elapsed))
+    lower_mass = float(mass_remaining_from_k(upper_k, days_elapsed))
+    return lower_mass, upper_mass
+
+
+def predict_degradation_rate(
+    model,
+    material_type: str,
+    cellulose_percentage: float,
+    temperature_c: float,
+    ph_level: float,
+    environment: str,
+    degree_substitution: float,
+) -> float:
+    """Predict the exponential degradation rate constant k."""
+    input_data = make_input_dataframe(
+        material_type=material_type,
+        cellulose_percentage=cellulose_percentage,
+        temperature_c=temperature_c,
+        ph_level=ph_level,
+        environment=environment,
+        degree_substitution=degree_substitution,
+    )
+    predicted_k = float(model.predict(input_data)[0])
+    return max(predicted_k, 0.0)
 
 
 def predict_mass_remaining(
@@ -54,18 +112,17 @@ def predict_mass_remaining(
     days_elapsed: float,
     degree_substitution: float,
 ) -> float:
-    """Predict mass remaining percentage and keep it in a realistic 0-100 range."""
-    input_data = make_input_dataframe(
+    """Predict mass remaining using the fitted exponential decay model."""
+    predicted_k = predict_degradation_rate(
+        model=model,
         material_type=material_type,
         cellulose_percentage=cellulose_percentage,
         temperature_c=temperature_c,
         ph_level=ph_level,
         environment=environment,
-        days_elapsed=days_elapsed,
         degree_substitution=degree_substitution,
     )
-    prediction = float(model.predict(input_data)[0])
-    return float(np.clip(prediction, 0, 100))
+    return float(mass_remaining_from_k(predicted_k, days_elapsed))
 
 
 def predict_degradation_percentage(mass_remaining_percentage: float) -> float:
@@ -99,39 +156,33 @@ def predict_degradation_curve(
     if len(days_array) == 0:
         raise ValueError("At least one day value is needed to make a curve.")
 
-    curve_inputs = pd.DataFrame(
-        {
-            "Material_Type": material_type,
-            "Cellulose_Percentage": cellulose_percentage,
-            "Temperature_C": temperature_c,
-            "pH_Level": ph_level,
-            "Environment": environment,
-            "Days_Elapsed": days_array,
-            "degree_substitution": degree_substitution,
-        },
-        columns=FEATURE_COLUMNS,
+    predicted_k = predict_degradation_rate(
+        model=model,
+        material_type=material_type,
+        cellulose_percentage=cellulose_percentage,
+        temperature_c=temperature_c,
+        ph_level=ph_level,
+        environment=environment,
+        degree_substitution=degree_substitution,
     )
-
-    mass_remaining = np.clip(model.predict(curve_inputs), 0, 100)
+    mass_remaining = mass_remaining_from_k(predicted_k, days_array)
     curve = pd.DataFrame(
         {
             "Days_Elapsed": days_array,
             "Mass_Remaining_Percentage": mass_remaining,
+            "Degradation_Rate_k": predicted_k,
         }
     )
     curve["Degradation_Percentage"] = 100 - curve["Mass_Remaining_Percentage"]
 
     if uncertainty is not None:
-        curve["Uncertainty"] = float(uncertainty)
-        curve["Estimated_Lower_Mass_Remaining_Percentage"] = np.clip(
-            curve["Mass_Remaining_Percentage"] - uncertainty,
-            0,
-            100,
+        lower_mass = mass_remaining_from_k(predicted_k + uncertainty, days_array)
+        upper_mass = mass_remaining_from_k(
+            max(predicted_k - uncertainty, 0.0),
+            days_array,
         )
-        curve["Estimated_Upper_Mass_Remaining_Percentage"] = np.clip(
-            curve["Mass_Remaining_Percentage"] + uncertainty,
-            0,
-            100,
-        )
+        curve["Rate_Uncertainty_k"] = float(uncertainty)
+        curve["Estimated_Lower_Mass_Remaining_Percentage"] = lower_mass
+        curve["Estimated_Upper_Mass_Remaining_Percentage"] = upper_mass
 
     return curve
