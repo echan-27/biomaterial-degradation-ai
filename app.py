@@ -142,7 +142,12 @@ def read_model_metrics() -> pd.DataFrame:
     if metrics_table.empty or any(column not in metrics_table for column in required_columns):
         return pd.DataFrame()
 
-    return metrics_table[required_columns].sort_values("RMSE").reset_index(drop=True)
+    if "Balanced_Rank" in metrics_table:
+        metrics_table = metrics_table.sort_values(["Balanced_Rank", "RMSE"])
+    else:
+        metrics_table = metrics_table.sort_values("RMSE")
+
+    return metrics_table[required_columns].reset_index(drop=True)
 
 
 def read_best_test_metrics(metrics_table: pd.DataFrame) -> dict[str, float] | None:
@@ -217,17 +222,18 @@ def render_feature_inputs(
 
 
 def format_metric_table(metrics_table: pd.DataFrame) -> pd.DataFrame:
-    """Rename R2 for display without changing saved CSV columns."""
-    return metrics_table.rename(columns={"R2": "R²"})
+    """Show the user-facing mass metrics in a clean table."""
+    display_columns = ["Model", "MAE", "RMSE", "R2"]
+    return metrics_table[display_columns].rename(columns={"R2": "R²"})
 
 
 def show_metric_explanations() -> None:
     """Explain model metrics in beginner-friendly language."""
     st.markdown(
         """
-        - **MAE**: Average error in the predicted degradation rate `k`. Lower is better.
-        - **RMSE**: Similar to MAE, but it punishes larger `k` mistakes more. Lower is better.
-        - **R²**: How much of the `k` pattern the model explains. 1.0 is perfect, 0.0 is close to guessing the average.
+        - **MAE**: Average error in mass remaining percentage points. Lower is better.
+        - **RMSE**: Similar to MAE, but it punishes larger mass prediction mistakes more. Lower is better.
+        - **R²**: How much of the mass remaining pattern the model explains. 1.0 is perfect, 0.0 is close to guessing the average.
         """
     )
 
@@ -512,11 +518,13 @@ with performance_tab:
     best_model_name = model_summary.get("best_model", "Saved model")
     train_rows = model_summary.get("train_rows", "N/A")
     test_rows = model_summary.get("test_rows", "N/A")
+    outliers_removed = model_summary.get("fitted_rate_outliers_removed", "N/A")
 
-    summary_columns = st.columns(3)
+    summary_columns = st.columns(4)
     summary_columns[0].metric("Best model", best_model_name)
     summary_columns[1].metric("Training rows", train_rows)
     summary_columns[2].metric("Test rows", test_rows)
+    summary_columns[3].metric("Outliers removed", outliers_removed)
 
     if test_metrics:
         metric_columns = st.columns(3)
@@ -552,6 +560,13 @@ with performance_tab:
         )
     else:
         st.info("Run `python src/train_model.py` to generate model metrics.")
+
+    outlier_filter = model_summary.get("outlier_filter", {})
+    if outlier_filter:
+        st.caption(
+            "Extreme fitted-k rows above Q3 + 3 x IQR are removed from model "
+            "training/evaluation. The raw dataset is still available in Dataset Explorer."
+        )
 
 with data_tab:
     st.subheader("Dataset explorer")

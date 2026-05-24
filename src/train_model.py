@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyRegressor
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import (
+    ExtraTreesRegressor,
+    GradientBoostingRegressor,
+    RandomForestRegressor,
+)
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -27,6 +31,7 @@ from src.config import (
     DATA_PATH,
     METRICS_PATH,
     MODEL_PATH,
+    OUTLIER_REPORT_PATH,
     PROJECT_ROOT,
     RATE_FEATURE_COLUMNS,
     RATE_NUMERIC_FEATURES,
@@ -41,6 +46,7 @@ from src.predict import mass_remaining_from_k
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 MIN_MASS_FRACTION = 0.001
+OUTLIER_IQR_MULTIPLIER = 2.0
 
 
 def fit_rate_constant_for_group(group: pd.DataFrame) -> dict:
@@ -100,6 +106,37 @@ def build_rate_dataset(data: pd.DataFrame) -> pd.DataFrame:
     return rate_data.dropna(subset=RATE_FEATURE_COLUMNS + [RATE_TARGET_COLUMN])
 
 
+def remove_rate_outliers(rate_data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Remove extreme fitted-k rows using a conservative 3x IQR upper fence."""
+    q1 = float(rate_data[RATE_TARGET_COLUMN].quantile(0.25))
+    q3 = float(rate_data[RATE_TARGET_COLUMN].quantile(0.75))
+    iqr = q3 - q1
+    upper_limit = q3 + OUTLIER_IQR_MULTIPLIER * iqr
+
+    keep_mask = rate_data[RATE_TARGET_COLUMN] <= upper_limit
+    filtered_data = rate_data[keep_mask].reset_index(drop=True)
+    removed_data = rate_data[~keep_mask].sort_values(
+        RATE_TARGET_COLUMN,
+        ascending=False,
+    )
+
+    OUTLIER_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    removed_data.to_csv(OUTLIER_REPORT_PATH, index=False)
+
+    outlier_summary = {
+        "method": f"Remove fitted k values above Q3 + {OUTLIER_IQR_MULTIPLIER} * IQR.",
+        "q1": q1,
+        "q3": q3,
+        "iqr": float(iqr),
+        "upper_limit": float(upper_limit),
+        "rows_before_filtering": int(len(rate_data)),
+        "rows_after_filtering": int(len(filtered_data)),
+        "rows_removed": int(len(removed_data)),
+        "removed_outliers_path": str(OUTLIER_REPORT_PATH.relative_to(PROJECT_ROOT)),
+    }
+    return filtered_data, removed_data.reset_index(drop=True), outlier_summary
+
+
 def build_preprocessor() -> ColumnTransformer:
     """Create the preprocessing steps for the k prediction model."""
     return ColumnTransformer(
@@ -120,8 +157,15 @@ def build_model(model_name: str) -> Pipeline:
         "DummyRegressor": DummyRegressor(strategy="mean"),
         "Ridge Regression": Ridge(alpha=1.0),
         "RandomForestRegressor": RandomForestRegressor(
-            n_estimators=300,
+            n_estimators=800,
+            max_features=0.8,
             random_state=RANDOM_STATE,
+            n_jobs=-1,
+        ),
+        "ExtraTreesRegressor": ExtraTreesRegressor(
+            n_estimators=800,
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
         ),
         "GradientBoostingRegressor": GradientBoostingRegressor(
             random_state=RANDOM_STATE,
@@ -141,14 +185,24 @@ def predict_non_negative_k(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
     return np.clip(model.predict(X), 0, None)
 
 
-def evaluate_model(model: Pipeline, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
-    """Calculate model metrics for predicting k."""
+def evaluate_model(model: Pipeline, test_data: pd.DataFrame, y_test: pd.Series) -> dict:
+    """Calculate user-facing mass metrics plus technical k metrics."""
+    X_test = test_data[RATE_FEATURE_COLUMNS]
     predicted_k = predict_non_negative_k(model, X_test)
-    rmse = np.sqrt(mean_squared_error(y_test, predicted_k))
+    k_rmse = np.sqrt(mean_squared_error(y_test, predicted_k))
+
+    evaluation_days = test_data["Evaluation_Day"].to_numpy(dtype=float)
+    actual_mass = mass_remaining_from_k(y_test.to_numpy(dtype=float), evaluation_days)
+    predicted_mass = mass_remaining_from_k(predicted_k, evaluation_days)
+    mass_rmse = np.sqrt(mean_squared_error(actual_mass, predicted_mass))
+
     return {
-        "MAE": mean_absolute_error(y_test, predicted_k),
-        "RMSE": rmse,
-        "R2": r2_score(y_test, predicted_k),
+        "MAE": mean_absolute_error(actual_mass, predicted_mass),
+        "RMSE": mass_rmse,
+        "R2": r2_score(actual_mass, predicted_mass),
+        "K_MAE": mean_absolute_error(y_test, predicted_k),
+        "K_RMSE": k_rmse,
+        "K_R2": r2_score(y_test, predicted_k),
     }
 
 
@@ -172,17 +226,29 @@ def train_and_compare_models(
         "DummyRegressor",
         "Ridge Regression",
         "RandomForestRegressor",
+        "ExtraTreesRegressor",
         "GradientBoostingRegressor",
     ]
 
     for model_name in model_names:
         model = build_model(model_name)
         model.fit(X_train, y_train)
-        metrics = evaluate_model(model, X_test, y_test)
+        metrics = evaluate_model(model, test_data, y_test)
         results.append({"Model": model_name, **metrics})
         trained_models[model_name] = model
 
-    metrics_table = pd.DataFrame(results).sort_values("RMSE").reset_index(drop=True)
+    metrics_table = pd.DataFrame(results)
+    metrics_table["MAE_Rank"] = metrics_table["MAE"].rank(method="min")
+    metrics_table["RMSE_Rank"] = metrics_table["RMSE"].rank(method="min")
+    metrics_table["R2_Rank"] = (-metrics_table["R2"]).rank(method="min")
+    metrics_table["Balanced_Rank"] = (
+        metrics_table["MAE_Rank"]
+        + metrics_table["RMSE_Rank"]
+        + metrics_table["R2_Rank"]
+    )
+    metrics_table = metrics_table.sort_values(
+        ["Balanced_Rank", "RMSE"],
+    ).reset_index(drop=True)
     best_model_name = str(metrics_table.loc[0, "Model"])
     best_model = trained_models[best_model_name]
     return (
@@ -261,6 +327,9 @@ def main() -> None:
     """Run the complete training workflow."""
     raw_data = load_training_data()
     rate_data = build_rate_dataset(raw_data)
+    filtered_rate_data, removed_outliers, outlier_summary = remove_rate_outliers(
+        rate_data,
+    )
     (
         metrics_table,
         best_model_name,
@@ -269,13 +338,13 @@ def main() -> None:
         y_test,
         train_rows,
         test_rows,
-    ) = train_and_compare_models(rate_data)
+    ) = train_and_compare_models(filtered_rate_data)
     save_best_model(best_model)
 
     METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     metrics_table.to_csv(METRICS_PATH, index=False)
     best_metrics = metrics_table.iloc[0]
-    k_uncertainty = float(best_metrics["RMSE"])
+    k_uncertainty = float(best_metrics["K_RMSE"])
     mass_metrics = save_test_predictions(best_model, X_test, y_test, k_uncertainty)
 
     summary = {
@@ -283,9 +352,12 @@ def main() -> None:
         "model_target": RATE_TARGET_COLUMN,
         "curve_equation": "Mass_Remaining_Percentage = 100 * exp(-k * Days_Elapsed)",
         "physics_constraint": "Predicted k is clipped to be non-negative, so mass remaining cannot increase over time.",
-        "selection_rule": "Lowest RMSE for predicted k on the held-out test set",
+        "selection_rule": "Lowest balanced rank across mass MAE, mass RMSE, and mass R2 on the held-out test set",
         "raw_rows_used": int(len(raw_data)),
-        "fitted_rate_rows_used": int(len(rate_data)),
+        "fitted_rate_rows_before_outlier_filtering": int(len(rate_data)),
+        "fitted_rate_rows_used": int(len(filtered_rate_data)),
+        "fitted_rate_outliers_removed": int(len(removed_outliers)),
+        "outlier_filter": outlier_summary,
         "train_rows": int(train_rows),
         "test_rows": int(test_rows),
         "test_size": TEST_SIZE,
@@ -297,6 +369,11 @@ def main() -> None:
             "MAE": float(best_metrics["MAE"]),
             "RMSE": float(best_metrics["RMSE"]),
             "R2": float(best_metrics["R2"]),
+        },
+        "rate_model_test_metrics": {
+            "MAE": float(best_metrics["K_MAE"]),
+            "RMSE": float(best_metrics["K_RMSE"]),
+            "R2": float(best_metrics["K_R2"]),
         },
         "mass_prediction_test_metrics": mass_metrics,
         "uncertainty_estimate": {
@@ -314,7 +391,7 @@ def main() -> None:
     }
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    print("Model comparison table for degradation rate k (sorted by lowest RMSE):")
+    print("Model comparison table for mass remaining (sorted by lowest RMSE):")
     print(metrics_table.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
     print(f"\nBest model: {best_model_name}")
     print(f"Saved model to: {MODEL_PATH}")

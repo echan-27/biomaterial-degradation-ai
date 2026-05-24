@@ -3,11 +3,24 @@
   "model_target": "Degradation_Rate_k",
   "curve_equation": "Mass_Remaining_Percentage = 100 * exp(-k * Days_Elapsed)",
   "physics_constraint": "Predicted k is clipped to be non-negative, so mass remaining cannot increase over time.",
-  "selection_rule": "Lowest RMSE for predicted k on the held-out test set",
+  "selection_rule": "Lowest balanced rank across mass MAE, mass RMSE, and mass R2 on the held-out test set",
   "raw_rows_used": 311,
-  "fitted_rate_rows_used": 248,
-  "train_rows": 198,
-  "test_rows": 50,
+  "fitted_rate_rows_before_outlier_filtering": 248,
+  "fitted_rate_rows_used": 225,
+  "fitted_rate_outliers_removed": 23,
+  "outlier_filter": {
+    "method": "Remove fitted k values above Q3 + 2.0 * IQR.",
+    "q1": 0.005564282472133097,
+    "q3": 0.03359566856364829,
+    "iqr": 0.028031386091515193,
+    "upper_limit": 0.08965844074667867,
+    "rows_before_filtering": 248,
+    "rows_after_filtering": 225,
+    "rows_removed": 23,
+    "removed_outliers_path": "models/removed_rate_outliers.csv"
+  },
+  "train_rows": 180,
+  "test_rows": 45,
   "test_size": 0.2,
   "data_path": "data/degradationdata.xlsx",
   "target_column": "Mass_Remaining_Percentage",
@@ -21,23 +34,28 @@
     "degree_substitution"
   ],
   "best_model_test_metrics": {
-    "MAE": 0.027656532374270505,
-    "RMSE": 0.06358630607220035,
-    "R2": 0.6215297212512862
+    "MAE": 6.481988439439215,
+    "RMSE": 9.739705219992713,
+    "R2": 0.8648901452455667
+  },
+  "rate_model_test_metrics": {
+    "MAE": 0.00675971820356165,
+    "RMSE": 0.012317480674613062,
+    "R2": 0.5958752479660612
   },
   "mass_prediction_test_metrics": {
-    "MAE": 14.6722260295069,
-    "RMSE": 27.10184922826271,
-    "MedianAbsoluteError": 5.782129108731212
+    "MAE": 6.481988439439215,
+    "RMSE": 9.739705219992713,
+    "MedianAbsoluteError": 4.41358500848726
   },
   "uncertainty_estimate": {
     "method": "Use held-out test MAE for mass remaining as +/- percentage points.",
-    "value": 14.6722260295069,
+    "value": 6.481988439439215,
     "unit": "percentage points"
   },
   "rate_uncertainty_estimate": {
     "method": "Use the best model's held-out test RMSE for k.",
-    "value": 0.06358630607220035,
+    "value": 0.012317480674613062,
     "unit": "1/day"
   },
   "saved_model_path": "models/best_model.pkl",

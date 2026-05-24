@@ -13,6 +13,7 @@ MODEL_PATH = PROJECT_ROOT / "models" / "best_model.pkl"
 METRICS_PATH = PROJECT_ROOT / "models" / "model_metrics.csv"
 SUMMARY_PATH = PROJECT_ROOT / "models" / "model_summary.json"
 TEST_PREDICTIONS_PATH = PROJECT_ROOT / "models" / "test_predictions.csv"
+OUTLIER_REPORT_PATH = PROJECT_ROOT / "models" / "removed_rate_outliers.csv"
 
 TARGET_COLUMN = "Mass_Remaining_Percentage"
 RATE_TARGET_COLUMN = "Degradation_Rate_k"

@@ -59,6 +59,7 @@ data/degradationdata.xlsx
 models/best_model.pkl   Saved best model
 models/model_metrics.csv Held-out test metrics for each model
 models/test_predictions.csv Actual vs predicted test-set results
+models/removed_rate_outliers.csv Fitted-k rows removed by the outlier filter
 src/clean_data.py       Loads and cleans the spreadsheet
 src/train_model.py      Trains and compares models
 src/predict.py          Loads the model and makes predictions
@@ -95,6 +96,7 @@ The script compares:
 - `DummyRegressor`
 - Ridge Regression
 - `RandomForestRegressor`
+- `ExtraTreesRegressor`
 - `GradientBoostingRegressor`
 
 Each model uses a scikit-learn `Pipeline` with:
@@ -108,6 +110,11 @@ The models are evaluated with:
 - RMSE
 - R²
 
+The main `MAE`, `RMSE`, and `R²` columns in `models/model_metrics.csv` measure
+predicted mass remaining percentage because that is the user-facing prediction.
+The file also includes technical `K_MAE`, `K_RMSE`, and `K_R2` columns for the
+internal degradation-rate model.
+
 The data is split into:
 
 - 80% training data
@@ -116,8 +123,8 @@ The data is split into:
 The training script first fits `k` values from the measured mass remaining data
 using the exponential decay equation. Each machine learning model trains only on
 the training set of fitted `k` values. The test set is kept separate and is used
-only for evaluation. The best model is selected by lowest RMSE for `k` on the
-held-out test set and saved to:
+only for evaluation. The best model is selected by lowest RMSE for predicted
+mass remaining on the held-out test set and saved to:
 
 ```text
 models/best_model.pkl
@@ -136,6 +143,44 @@ The test-set actual vs predicted values are saved to:
 
 ```text
 models/test_predictions.csv
+```
+
+## Accuracy Improvements
+
+The current training script uses a balanced model-selection rule:
+
+- It ranks each model by mass MAE, mass RMSE, and mass R².
+- It selects the model with the best combined rank, so one metric is not
+  improved by making another metric much worse.
+
+It also includes two accuracy-focused changes:
+
+- It adds `ExtraTreesRegressor` and a tuned `RandomForestRegressor`.
+- It removes extreme fitted degradation-rate outliers before the train/test
+  split using the rule: fitted `k` values above `Q3 + 2 * IQR`.
+
+The raw spreadsheet is not edited. Removed fitted-rate rows are saved to:
+
+```text
+models/removed_rate_outliers.csv
+```
+
+For the current dataset, this removes 23 fitted-rate rows from 248 fitted
+conditions. These removed rows represent unusually fast degradation rates, so
+predictions for extremely fast-degrading compost conditions should be treated
+with extra caution.
+
+Current held-out performance after these changes:
+
+```text
+Best model: RandomForestRegressor
+Mass MAE:   6.48 percentage points
+Mass RMSE:  9.74 percentage points
+Mass R²:    0.865
+
+Technical k MAE:  0.00676
+Technical k RMSE: 0.01232
+Technical k R²:   0.596
 ```
 
 ## Run the Website
