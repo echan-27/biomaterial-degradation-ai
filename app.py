@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from src.clean_data import get_category_options, load_training_data
-from src.config import DATA_PATH, METRICS_PATH, MODEL_PATH, SUMMARY_PATH
+from src.config import CV_RESULTS_PATH, DATA_PATH, METRICS_PATH, MODEL_PATH, SUMMARY_PATH
 from src.predict import (
     calculate_uncertainty_range,
     load_model,
@@ -129,7 +129,7 @@ def read_model_summary() -> dict:
 
 
 def read_model_metrics() -> pd.DataFrame:
-    """Read the full model comparison table from model_metrics.csv."""
+    """Read the selected model's final hold-out test metrics."""
     if not Path(METRICS_PATH).exists():
         return pd.DataFrame()
 
@@ -148,6 +148,27 @@ def read_model_metrics() -> pd.DataFrame:
         metrics_table = metrics_table.sort_values("RMSE")
 
     return metrics_table[required_columns].reset_index(drop=True)
+
+
+def read_cv_results() -> pd.DataFrame:
+    """Read the training-only cross-validation model comparison table."""
+    if not Path(CV_RESULTS_PATH).exists():
+        return pd.DataFrame()
+
+    try:
+        cv_table = pd.read_csv(CV_RESULTS_PATH)
+    except Exception:
+        return pd.DataFrame()
+
+    required_columns = ["Model", "CV_MAE", "CV_RMSE", "CV_R2"]
+    if cv_table.empty or any(column not in cv_table for column in required_columns):
+        return pd.DataFrame()
+
+    display_columns = required_columns.copy()
+    if "Best_Params" in cv_table:
+        display_columns.append("Best_Params")
+
+    return cv_table.sort_values("CV_RMSE")[display_columns].reset_index(drop=True)
 
 
 def read_best_test_metrics(metrics_table: pd.DataFrame) -> dict[str, float] | None:
@@ -227,6 +248,21 @@ def format_metric_table(metrics_table: pd.DataFrame) -> pd.DataFrame:
     return metrics_table[display_columns].rename(columns={"R2": "R²"})
 
 
+def format_cv_table(cv_table: pd.DataFrame) -> pd.DataFrame:
+    """Show cross-validation model-selection results in a clean table."""
+    display_columns = ["Model", "CV_MAE", "CV_RMSE", "CV_R2"]
+    if "Best_Params" in cv_table:
+        display_columns.append("Best_Params")
+    return cv_table[display_columns].rename(
+        columns={
+            "CV_MAE": "CV MAE",
+            "CV_RMSE": "CV RMSE",
+            "CV_R2": "CV R²",
+            "Best_Params": "Best parameters",
+        }
+    )
+
+
 def show_metric_explanations() -> None:
     """Explain model metrics in beginner-friendly language."""
     st.markdown(
@@ -269,9 +305,14 @@ environments = (
 
 model_summary = read_model_summary()
 model_metrics = read_model_metrics()
+cv_results = read_cv_results()
 test_metrics = read_best_test_metrics(model_metrics)
 uncertainty_info = model_summary.get("uncertainty_estimate", {})
 mass_uncertainty = uncertainty_info.get("value")
+try:
+    mass_uncertainty = float(mass_uncertainty) if mass_uncertainty is not None else None
+except (TypeError, ValueError):
+    mass_uncertainty = None
 
 day_default = int(round(median_or_default(training_data, "Days_Elapsed", 14.0)))
 max_training_day = int(round(max_or_default(training_data, "Days_Elapsed", 365.0)))
@@ -328,6 +369,7 @@ with predictor_tab:
         ph_level=predictor_features["ph_level"],
         environment=environment,
         degree_substitution=predictor_features["degree_substitution"],
+        evaluation_day=days_elapsed,
     )
     mass_remaining = predict_mass_remaining(
         model=model,
@@ -347,7 +389,7 @@ with predictor_tab:
             mass_uncertainty,
         )
         mass_value = f"{mass_remaining:.1f}%"
-        range_value = f"{lower_mass:.1f}%–{upper_mass:.1f}%"
+        range_value = f"{lower_mass:.1f}% to {upper_mass:.1f}%"
     else:
         mass_value = f"{mass_remaining:.1f}%"
         range_value = "Not available"
@@ -376,6 +418,7 @@ with predictor_tab:
         environment=environment,
         degree_substitution=predictor_features["degree_substitution"],
         days=days_for_curve,
+        uncertainty=mass_uncertainty,
     )
     curve_display = curve.rename(
         columns={
@@ -518,7 +561,7 @@ with performance_tab:
     best_model_name = model_summary.get("best_model", "Saved model")
     train_rows = model_summary.get("train_rows", "N/A")
     test_rows = model_summary.get("test_rows", "N/A")
-    outliers_removed = model_summary.get("fitted_rate_outliers_removed", "N/A")
+    outliers_removed = model_summary.get("training_rate_outliers_removed", "N/A")
 
     summary_columns = st.columns(4)
     summary_columns[0].metric("Best model", best_model_name)
@@ -534,19 +577,8 @@ with performance_tab:
 
     show_metric_explanations()
 
-    mass_metrics = model_summary.get("mass_prediction_test_metrics", {})
-    if mass_metrics:
-        st.markdown("**Mass remaining error on held-out test conditions**")
-        mass_columns = st.columns(2)
-        mass_columns[0].metric("Mass MAE", f"{mass_metrics['MAE']:.1f} points")
-        mass_columns[1].metric("Mass RMSE", f"{mass_metrics['RMSE']:.1f} points")
-        st.caption(
-            "The Predictor tab uses Mass MAE as a simple typical-error range. "
-            "This avoids the very wide 0%–100% ranges that came from propagating k uncertainty."
-        )
-
     if not model_metrics.empty:
-        st.markdown("**Model comparison on the held-out test set**")
+        st.markdown("**Final hold-out test result for the selected model**")
         st.dataframe(
             format_metric_table(model_metrics),
             column_config={
@@ -561,11 +593,39 @@ with performance_tab:
     else:
         st.info("Run `python src/train_model.py` to generate model metrics.")
 
+    if not cv_results.empty:
+        st.markdown("**Cross-validation model comparison**")
+        st.caption(
+            "These results come from 5-fold cross-validation on the training set only. "
+            "The untouched test set is not used to choose the model."
+        )
+        st.dataframe(
+            format_cv_table(cv_results),
+            column_config={
+                "Model": st.column_config.TextColumn("Model"),
+                "CV MAE": st.column_config.NumberColumn("CV MAE", format="%.5f"),
+                "CV RMSE": st.column_config.NumberColumn("CV RMSE", format="%.5f"),
+                "CV R²": st.column_config.NumberColumn("CV R²", format="%.3f"),
+                "Best parameters": st.column_config.TextColumn("Best parameters"),
+            },
+            width="stretch",
+            hide_index=True,
+        )
+
+    if mass_uncertainty is not None:
+        st.markdown("**Prediction range**")
+        st.metric("Mass MAE", f"{mass_uncertainty:.1f} points")
+        st.caption(
+            "The estimated range in Predictor uses the selected model's held-out "
+            "mass MAE as a practical +/- percentage-point band. It is not a formal "
+            "confidence interval."
+        )
+
     outlier_filter = model_summary.get("outlier_filter", {})
     if outlier_filter:
         st.caption(
-            "Extreme fitted-k rows above Q3 + 3 x IQR are removed from model "
-            "training/evaluation. The raw dataset is still available in Dataset Explorer."
+            "Extreme fitted-k rows above Q3 + 3 x IQR are removed from the training "
+            "set only. The hold-out test set and raw dataset stay untouched."
         )
 
 with data_tab:
@@ -660,8 +720,9 @@ with about_tab:
     st.markdown(
         """
         - Predictions are only as reliable as the dataset used for training.
-        - The estimated range is based on held-out test error for mass remaining.
-          It is a rough typical-error range, not a formal confidence interval.
+        - The estimated range uses held-out test MAE for mass remaining as a
+          practical error band. It is a rough typical-error range, not a formal
+          confidence interval.
         - Real degradation can depend on factors not included here, such as
           humidity, microbial activity, sample thickness, and measurement error.
         - Use the predictions as a research guide, not as proof of laboratory results.

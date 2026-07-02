@@ -3,25 +3,31 @@
   "model_target": "Degradation_Rate_k",
   "curve_equation": "Mass_Remaining_Percentage = 100 * exp(-k * Days_Elapsed)",
   "physics_constraint": "Predicted k is clipped to be non-negative, so mass remaining cannot increase over time.",
-  "selection_rule": "Lowest balanced rank across mass MAE, mass RMSE, and mass R2 on the held-out test set",
+  "selection_rule": "Highest 5-fold cross-validation score on the filtered training set only. The score is negative mass RMSE, so higher is better.",
   "raw_rows_used": 311,
-  "fitted_rate_rows_before_outlier_filtering": 248,
-  "fitted_rate_rows_used": 225,
-  "fitted_rate_outliers_removed": 23,
+  "fitted_rate_rows_before_split": 248,
+  "train_rows_before_outlier_filtering": 198,
+  "train_rows_after_outlier_filtering": 182,
+  "train_rows": 182,
+  "test_rows": 50,
+  "untouched_test_rows": 50,
+  "fitted_rate_outliers_removed": 16,
+  "training_rate_outliers_removed": 16,
   "outlier_filter": {
-    "method": "Remove fitted k values above Q3 + 2.0 * IQR.",
-    "q1": 0.005564282472133097,
-    "q3": 0.03359566856364829,
-    "iqr": 0.028031386091515193,
-    "upper_limit": 0.08965844074667867,
-    "rows_before_filtering": 248,
-    "rows_after_filtering": 225,
-    "rows_removed": 23,
+    "method": "Remove training fitted-k values above Q3 + 3.0 * IQR.",
+    "computed_on": "training set only",
+    "test_set_policy": "The hold-out test set is untouched and unfiltered.",
+    "q1": 0.006134118112289248,
+    "q3": 0.033057000547561194,
+    "iqr": 0.026922882435271946,
+    "upper_limit": 0.11382564785337704,
+    "training_rows_before_filtering": 198,
+    "training_rows_after_filtering": 182,
+    "training_rows_removed": 16,
     "removed_outliers_path": "models/removed_rate_outliers.csv"
   },
-  "train_rows": 180,
-  "test_rows": 45,
   "test_size": 0.2,
+  "cv_folds": 5,
   "data_path": "data/degradationdata.xlsx",
   "target_column": "Mass_Remaining_Percentage",
   "rate_target_column": "Degradation_Rate_k",
@@ -34,30 +40,32 @@
     "degree_substitution"
   ],
   "best_model_test_metrics": {
-    "MAE": 6.481988439439215,
-    "RMSE": 9.739705219992713,
-    "R2": 0.8648901452455667
+    "MAE": 13.625709126827257,
+    "RMSE": 23.568017114435612,
+    "R2": 0.4176049595792608
   },
   "rate_model_test_metrics": {
-    "MAE": 0.00675971820356165,
-    "RMSE": 0.012317480674613062,
-    "R2": 0.5958752479660612
+    "MAE": 0.03405572662739052,
+    "RMSE": 0.10191092797064673,
+    "R2": 0.027821303676158093
   },
   "mass_prediction_test_metrics": {
-    "MAE": 6.481988439439215,
-    "RMSE": 9.739705219992713,
-    "MedianAbsoluteError": 4.41358500848726
+    "MAE": 13.62570912682726,
+    "RMSE": 23.568017114435612,
+    "MedianAbsoluteError": 5.263761969941669
   },
   "uncertainty_estimate": {
     "method": "Use held-out test MAE for mass remaining as +/- percentage points.",
-    "value": 6.481988439439215,
+    "value": 13.62570912682726,
     "unit": "percentage points"
   },
   "rate_uncertainty_estimate": {
-    "method": "Use the best model's held-out test RMSE for k.",
-    "value": 0.012317480674613062,
+    "method": "Use the selected model's untouched hold-out test RMSE for k.",
+    "value": 0.10191092797064673,
     "unit": "1/day"
   },
   "saved_model_path": "models/best_model.pkl",
+  "model_metrics_path": "models/model_metrics.csv",
+  "cv_results_path": "models/cv_model_comparison.csv",
   "test_predictions_path": "models/test_predictions.csv"
 }

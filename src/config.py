@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = PROJECT_ROOT / "data" / "degradationdata.xlsx"
 MODEL_PATH = PROJECT_ROOT / "models" / "best_model.pkl"
 METRICS_PATH = PROJECT_ROOT / "models" / "model_metrics.csv"
+CV_RESULTS_PATH = PROJECT_ROOT / "models" / "cv_model_comparison.csv"
 SUMMARY_PATH = PROJECT_ROOT / "models" / "model_summary.json"
 TEST_PREDICTIONS_PATH = PROJECT_ROOT / "models" / "test_predictions.csv"
 OUTLIER_REPORT_PATH = PROJECT_ROOT / "models" / "removed_rate_outliers.csv"

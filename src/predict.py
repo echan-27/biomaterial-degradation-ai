@@ -29,8 +29,9 @@ def make_input_dataframe(
     ph_level: float,
     environment: str,
     degree_substitution: float,
+    evaluation_day: float = 0.0,
 ) -> pd.DataFrame:
-    """Create a one-row table with the exact feature columns the model expects."""
+    """Create a one-row table with the feature columns the model expects."""
     row = {
         "Material_Type": material_type,
         "Cellulose_Percentage": cellulose_percentage,
@@ -38,8 +39,9 @@ def make_input_dataframe(
         "pH_Level": ph_level,
         "Environment": environment,
         "degree_substitution": degree_substitution,
+        "Evaluation_Day": evaluation_day,
     }
-    return pd.DataFrame([row], columns=RATE_FEATURE_COLUMNS)
+    return pd.DataFrame([row], columns=RATE_FEATURE_COLUMNS + ["Evaluation_Day"])
 
 
 def mass_remaining_from_k(
@@ -88,6 +90,7 @@ def predict_degradation_rate(
     ph_level: float,
     environment: str,
     degree_substitution: float,
+    evaluation_day: float = 0.0,
 ) -> float:
     """Predict the exponential degradation rate constant k."""
     input_data = make_input_dataframe(
@@ -97,6 +100,7 @@ def predict_degradation_rate(
         ph_level=ph_level,
         environment=environment,
         degree_substitution=degree_substitution,
+        evaluation_day=evaluation_day,
     )
     predicted_k = float(model.predict(input_data)[0])
     return max(predicted_k, 0.0)
@@ -121,6 +125,7 @@ def predict_mass_remaining(
         ph_level=ph_level,
         environment=environment,
         degree_substitution=degree_substitution,
+        evaluation_day=days_elapsed,
     )
     return float(mass_remaining_from_k(predicted_k, days_elapsed))
 
@@ -164,6 +169,7 @@ def predict_degradation_curve(
         ph_level=ph_level,
         environment=environment,
         degree_substitution=degree_substitution,
+        evaluation_day=float(days_array.max()),
     )
     mass_remaining = mass_remaining_from_k(predicted_k, days_array)
     curve = pd.DataFrame(
@@ -176,12 +182,9 @@ def predict_degradation_curve(
     curve["Degradation_Percentage"] = 100 - curve["Mass_Remaining_Percentage"]
 
     if uncertainty is not None:
-        lower_mass = mass_remaining_from_k(predicted_k + uncertainty, days_array)
-        upper_mass = mass_remaining_from_k(
-            max(predicted_k - uncertainty, 0.0),
-            days_array,
-        )
-        curve["Rate_Uncertainty_k"] = float(uncertainty)
+        lower_mass = np.clip(mass_remaining - uncertainty, 0, 100)
+        upper_mass = np.clip(mass_remaining + uncertainty, 0, 100)
+        curve["Mass_Uncertainty_Percentage_Points"] = float(uncertainty)
         curve["Estimated_Lower_Mass_Remaining_Percentage"] = lower_mass
         curve["Estimated_Upper_Mass_Remaining_Percentage"] = upper_mass
 
